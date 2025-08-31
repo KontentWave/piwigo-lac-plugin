@@ -1,0 +1,10 @@
+# ignore all plugins by default
+/plugins/*
+
+# allow LAC (tracked in superproject)
+!/plugins/lac/
+!/plugins/lac/**
+
+# allow the submodule mount point (directory only)
+/plugins/core_privacy_toggle/**    # keep contents ignored by default
+!/plugins/core_privacy_toggle      # but allow the directory itself
