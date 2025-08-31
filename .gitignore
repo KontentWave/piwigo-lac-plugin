@@ -9,16 +9,18 @@
 !/.gitignore
 !/.gitmodules
 
-# Allow albums/plugins path chain
+# Allow albums path
 !/albums/
+
+# Ignore EVERYTHING under albums by default
+/albums/**
+
+# Re-allow plugins directory
 !/albums/plugins/
 
-# Ignore all plugins by default (only direct children)
-/albums/plugins/*
-
-# UNIGNORE the LAC plugin (tracked in main repo)
+# Track LAC plugin fully (part of main repo)
 !/albums/plugins/lac/
 !/albums/plugins/lac/**
 
-# Allow the submodule mount point (directory only)
+# Allow submodule mount point (directory entry only)
 !/albums/plugins/core_privacy_toggle
