@@ -1,0 +1,118 @@
+    <?php
+// Determine if HTTPS is enabled
+$secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443;
+
+// Configure session cookie parameters with HttpOnly, Secure, and SameSite attributes
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'domain' => '',
+    'secure' => $secure,
+    'httponly' => true,
+    'samesite' => 'Lax'
+]);
+session_start();
+
+// Read forum directory from .forumdir file in the root directory
+$forumdir_path = __DIR__ . '/.forumdir';
+$forumDir = './forum'; // default fallback
+if (file_exists($forumdir_path)) {
+    $custom = trim(file_get_contents($forumdir_path));
+    if ($custom !== '') {
+        $forumDir = $custom;
+    }
+}
+
+// 1) Handle incoming redirect parameter on GET
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['redirect'])) {
+    $raw = $_GET['redirect'];
+    // Decode, parse, strip sid, rebuild
+    $url = urldecode($raw);
+    $parts = parse_url($url);
+    $path  = $parts['path'] ?? '';
+    parse_str($parts['query'] ?? '', $qs);
+    unset($qs['sid']);              // REMOVE the session id!
+    $clean = $path;
+    if (!empty($qs)) {
+        $clean .= '?' . http_build_query($qs);
+    }
+    // Allow any path under /forum (or custom forumDir), fallback to forum index if not matching
+    if (preg_match('#^/' . preg_quote(trim($forumDir, './'), '#') . '(/|$)#', $clean)) {
+        $_SESSION['LAC_REDIRECT'] = $clean;
+    } else {
+        // If not a forum path, fallback to forum index (no /phpBB prefix)
+        $_SESSION['LAC_REDIRECT'] = '/' . trim($forumDir, './') . '/index.php';
+    }
+}
+// 2) If user already has a valid LAC cookie + PHPSESSID, go straight there
+$cookie_lifetime = 86400;
+if (
+    isset($_COOKIE['LAC'], $_COOKIE['PHPSESSID']) &&
+    is_numeric($_COOKIE['LAC']) &&
+    (time() - (int)$_COOKIE['LAC']) < $cookie_lifetime
+) {
+    // choose the stored redirect or the fallback
+    $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($forumDir, './') . '/index.php');
+    unset($_SESSION['LAC_REDIRECT']);
+    header("Location: " . $target);
+    exit;
+}
+
+// 3) Handle form submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
+    if ($_POST['consent'] === '18+') {
+        // set new LAC timestamp cookie
+        setcookie("LAC", (string)time(), [
+            'expires'  => time() + $cookie_lifetime,
+            'path'     => '/',
+            'domain'   => '',
+            'secure'   => $secure,
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+
+    // choose the stored redirect or the fallback
+    $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($forumDir, './') . '/index.php');
+    unset($_SESSION['LAC_REDIRECT']);
+    header("Location: " . $target);
+    exit;
+
+    } elseif ($_POST['consent'] === 'under18') {
+        // existing under‑18 logic …
+        $protocol   = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $currentUrl = "{$protocol}://{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}";
+        if (!empty($_SERVER['HTTP_REFERER']) && $_SERVER['HTTP_REFERER'] !== $currentUrl) {
+            header("Location: " . $_SERVER['HTTP_REFERER']);
+        } else {
+            header("Location: https://www.google.com");
+        }
+        exit;
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+	<!-- Google tag (gtag.js) -->
+	<script async src="https://www.googletagmanager.com/gtag/js?id=G-8H5H5EJ5ZD"></script>
+	<script>
+	  window.dataLayer = window.dataLayer || [];
+	  function gtag(){dataLayer.push(arguments);}
+	  gtag('js', new Date());
+	  gtag('config', 'G-8H5H5EJ5ZD');
+	</script>
+    <title>Overenie veku</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="ageconsent.css">
+</head>
+<body class="age-consent-page"> <div class="age-consent-container">
+    <h1>Stránky tohto fóra sú určené výhradne pre osoby staršie ako 18 rokov.</h1>
+    <h2>Prosím, potvrďte svoj vek</h2>
+    <p>Vstupom na fórum a kliknutím na tlačidlo "Súhlasím" potvrdzujem, že mám viac ako 18 rokov a súhlasím so <a href="./legal_clause.html" target="_blank" rel="noopener noreferrer"><strong>Zásadami tohto fóra</strong></a> a že obsah fóra nikdy nebudem sprístupňovať deťom a maloletým.</p>
+    <form method="post">
+        <button type="submit" name="consent" value="18+">Súhlasím, že som <br> starší ako 18 rokov</button>
+        <br><br>
+        <button type="submit" name="consent" value="under18">Som mladší ako 18 rokov<br> a chcem odísť</button>
+    </form>
+</div> </body>
+</html>

@@ -1,0 +1,24 @@
+# Ignore everything by default
+/*
+
+# Keep specific root files
+!/index.php
+!/ageconsent.css
+!/legal_clause.css
+!/legal_clause.html
+!/.gitignore
+!/.gitmodules
+
+# Allow albums/plugins tree minimally
+!/albums/
+!/albums/plugins/
+
+# Ignore all plugins by default
+/albums/plugins/*
+
+# Keep only these:
+!/albums/plugins/lac/
+!/albums/plugins/lac/**
+
+# Placeholders for submodule dirs (so Git allows adding them)
+/albums/plugins/core_privacy_toggle
