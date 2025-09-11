@@ -21,6 +21,7 @@
 # Track LAC plugin fully (part of main repo)
 !/albums/plugins/lac/
 !/albums/plugins/lac/**
+/albums/plugins/lac/tools
 
 # Allow submodule mount point (directory entry only)
 !/albums/plugins/core_privacy_toggle
