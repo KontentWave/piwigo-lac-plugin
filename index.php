@@ -13,13 +13,13 @@ session_set_cookie_params([
 ]);
 session_start();
 
-// Read forum directory from .forumdir file in the root directory
-$forumdir_path = __DIR__ . '/.forumdir';
-$forumDir = './forum'; // default fallback
-if (file_exists($forumdir_path)) {
-    $custom = trim(file_get_contents($forumdir_path));
+// Determine gallery (Piwigo) directory (hardcoded to ./albums with optional override via .gallerydir)
+$gallerydir_path = __DIR__ . '/.gallerydir';
+$galleryDir = './albums'; // default fallback
+if (file_exists($gallerydir_path)) {
+    $custom = trim(file_get_contents($gallerydir_path));
     if ($custom !== '') {
-        $forumDir = $custom;
+        $galleryDir = $custom;
     }
 }
 
@@ -36,12 +36,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['redirect'])) {
     if (!empty($qs)) {
         $clean .= '?' . http_build_query($qs);
     }
-    // Allow any path under /forum (or custom forumDir), fallback to forum index if not matching
-    if (preg_match('#^/' . preg_quote(trim($forumDir, './'), '#') . '(/|$)#', $clean)) {
+    // Allow any path under /albums (or custom galleryDir), fallback to gallery index if not matching
+    if (preg_match('#^/' . preg_quote(trim($galleryDir, './'), '#') . '(/|$)#', $clean)) {
         $_SESSION['LAC_REDIRECT'] = $clean;
     } else {
-        // If not a forum path, fallback to forum index (no /phpBB prefix)
-        $_SESSION['LAC_REDIRECT'] = '/' . trim($forumDir, './') . '/index.php';
+        // If not a gallery path, fallback to gallery index
+        $_SESSION['LAC_REDIRECT'] = '/' . trim($galleryDir, './') . '/index.php';
     }
 }
 // 2) If user already has a valid LAC cookie + PHPSESSID, go straight there
@@ -51,8 +51,10 @@ if (
     is_numeric($_COOKIE['LAC']) &&
     (time() - (int)$_COOKIE['LAC']) < $cookie_lifetime
 ) {
+    // mark current session as having granted consent for the gallery/plugin
+    $_SESSION['lac_consent_granted'] = true;
     // choose the stored redirect or the fallback
-    $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($forumDir, './') . '/index.php');
+    $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($galleryDir, './') . '/index.php');
     unset($_SESSION['LAC_REDIRECT']);
     header("Location: " . $target);
     exit;
@@ -70,9 +72,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
             'httponly' => true,
             'samesite' => 'Lax',
         ]);
+        // also set session flag consumed by the Piwigo plugin age gate
+        $_SESSION['lac_consent_granted'] = true;
 
     // choose the stored redirect or the fallback
-    $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($forumDir, './') . '/index.php');
+    $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($galleryDir, './') . '/index.php');
     unset($_SESSION['LAC_REDIRECT']);
     header("Location: " . $target);
     exit;

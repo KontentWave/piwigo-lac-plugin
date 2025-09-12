@@ -47,6 +47,10 @@ define('LAC_DIR',     PHPWG_ROOT_PATH . PWG_LOCAL_DIR . 'lac/');
 // +-----------------------------------------------------------------------+
 // init the plugin
 add_event_handler('init', 'lac_init');
+// age gate guard (must run very early for public side only)
+if (!defined('IN_ADMIN')) {
+  add_event_handler('init', 'lac_age_gate_guard', EVENT_HANDLER_PRIORITY_NEUTRAL, LAC_PATH.'include/age_gate.inc.php');
+}
 
 /*
  * this is the common way to define event functions: create a new function for each event you want to handle
