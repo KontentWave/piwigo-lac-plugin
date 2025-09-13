@@ -14,6 +14,11 @@ function lac_age_gate_guard()
   // Allow tests to disable real header()/exit side effects
   $test_mode = defined('LAC_TEST_MODE') && LAC_TEST_MODE === true;
 
+  // Configuration: if gate disabled, bypass
+  // Config check (use $conf directly; default enabled if not set)
+  global $conf;
+  if (isset($conf['lac_enabled']) && !$conf['lac_enabled']) { return; }
+
   if (!function_exists('lac_is_guest')) {
     // fallback if helpers not loaded yet
     function lac_is_guest() {

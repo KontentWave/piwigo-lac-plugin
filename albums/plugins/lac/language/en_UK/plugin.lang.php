@@ -1,4 +1,15 @@
 <?php
+// English language strings for Legal Age Consent plugin
+$lang['Legal Age Consent'] = 'Legal Age Consent';
+$lang['Enable age gate'] = 'Enable age gate';
+$lang['Fallback URL'] = 'Fallback URL';
+$lang['Settings'] = 'Settings';
+$lang['Settings saved'] = 'Settings saved';
+$lang['Invalid fallback URL (must start with http:// or https://)'] = 'Invalid fallback URL (must start with http:// or https://)';
+$lang['Fallback URL too long (max %d characters)'] = 'Fallback URL too long (max %d characters)';
+$lang['Internal URLs are not allowed as fallback'] = 'Internal URLs are not allowed as fallback';
+$lang['Save Settings'] = 'Save Settings';
+?><?php
 
 /*
  * as much as possible prefer using comprehensive keys (such as "Check here") instead of

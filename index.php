@@ -82,14 +82,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
     exit;
 
     } elseif ($_POST['consent'] === 'under18') {
-        // existing under‑18 logic …
+        // Decline: use configured fallback if present, else referrer, else Google
+        $configuredFallback = '';
+        // Attempt to read value directly from Piwigo config table to avoid filesystem permission issues.
+        try {
+            // Minimal bootstrap: load database credentials and perform a direct query.
+            $conf = [];
+            $prefixeTable = 'piwigo_'; // default fallback; will be overridden by include
+            @include __DIR__ . '/albums/local/config/database.inc.php';
+            if (!empty($conf['db_host'])) {
+                $mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+                if ($mysqli) {
+                    $table = $prefixeTable . 'config';
+                    $sql = "SELECT value FROM `".$table."` WHERE param='lac_fallback_url' LIMIT 1";
+                    $res = @mysqli_query($mysqli, $sql);
+                    if ($res && ($row = mysqli_fetch_assoc($res))) {
+                        $val = $row['value'];
+                        if ($val === 'false') { $val = ''; }
+                        if ($val !== 'true' && $val !== 'false') { $configuredFallback = trim($val); }
+                    }
+                    @mysqli_close($mysqli);
+                }
+            }
+        } catch (Throwable $e) {
+            // Swallow; will fall back to legacy file based approach
+        }
+        // Legacy file-based fallbacks removed: DB value only now.
         $protocol   = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
         $currentUrl = "{$protocol}://{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}";
-        if (!empty($_SERVER['HTTP_REFERER']) && $_SERVER['HTTP_REFERER'] !== $currentUrl) {
-            header("Location: " . $_SERVER['HTTP_REFERER']);
-        } else {
-            header("Location: https://www.google.com");
-        }
+        $target = $configuredFallback !== '' ? $configuredFallback : (!empty($_SERVER['HTTP_REFERER']) && $_SERVER['HTTP_REFERER'] !== $currentUrl ? $_SERVER['HTTP_REFERER'] : 'https://www.google.com');
+        header('Location: ' . $target);
         exit;
     }
 }
