@@ -11,13 +11,20 @@ if (!defined('LAC_TEST_MODE')) {
 	define('LAC_TEST_MODE', false);
 }
 
+// Shared cookie constants (centralize to avoid magic literals in multiple files)
+if (!defined('LAC_COOKIE_NAME')) { define('LAC_COOKIE_NAME', 'LAC'); }
+// Absolute max window (seconds) a consent cookie can be considered for reconstruction
+if (!defined('LAC_COOKIE_MAX_WINDOW')) { define('LAC_COOKIE_MAX_WINDOW', 86400); }
+
 /**
  * Determine if current user is a guest.
  */
 function lac_is_guest(): bool
 {
 	global $user;
-	return isset($user['is_guest']) && $user['is_guest'];
+	if (!isset($user) || !is_array($user)) { return true; }
+	if (!array_key_exists('is_guest', $user)) { return true; }
+	return !empty($user['is_guest']);
 }
 
 /**
@@ -25,7 +32,84 @@ function lac_is_guest(): bool
  */
 function lac_has_consent(): bool
 {
-	return !empty($_SESSION['lac_consent_granted']);
+	// Structured consent takes precedence
+	if (!empty($_SESSION['lac_consent']) && is_array($_SESSION['lac_consent'])) {
+		$c = $_SESSION['lac_consent'];
+		return !empty($c['granted']);
+	}
+	// Upgrade legacy flag (for backward compatibility and first acceptance) regardless of duration
+	if (!empty($_SESSION['lac_consent_granted'])) {
+		$_SESSION['lac_consent'] = ['granted' => true, 'timestamp' => time()];
+		if (isset($_GET['lac_debug'])) {
+			error_log('[LAC DEBUG] Upgraded legacy consent flag to structured form');
+		}
+		return true;
+	}
+	return false;
+}
+
+/**
+ * Evaluate whether consent has expired based on configured duration (minutes).
+ * Returns true if expired, false if still valid or session-only with duration 0.
+ */
+function lac_consent_expired(int $durationMinutes): bool
+{
+	if ($durationMinutes <= 0) { return false; } // session-only
+	if (empty($_SESSION['lac_consent']) || !is_array($_SESSION['lac_consent'])) { return true; }
+	$ts = $_SESSION['lac_consent']['timestamp'] ?? 0;
+	if (!$ts) { return true; }
+	$exp = $ts + ($durationMinutes * 60);
+	return time() >= $exp;
+}
+
+/**
+ * Retrieve consent duration (minutes). Falls back to DB direct lookup if missing/zero but a cached value
+ * may not yet be loaded into $conf (robustness for early init ordering issues reported in production).
+ */
+function lac_get_consent_duration(): int
+{
+	global $conf;
+	$debug = (defined('LAC_DEBUG') && LAC_DEBUG) || isset($_GET['lac_debug']);
+	if (isset($conf['lac_consent_duration'])) {
+		$val = (int)$conf['lac_consent_duration'];
+		if ($val > 0) {
+			if ($debug) { error_log('[LAC DEBUG] duration from $conf = '.$val.'m'); }
+			return $val;
+		}
+		// value is 0 -> attempt DB fallback below
+	}
+	static $fetched = false; static $cached = 0;
+	if ($fetched) { return $cached; }
+	$fetched = true;
+	// Attempt lightweight direct DB read mirroring root index approach
+	try {
+		if (isset($conf['db_host'])) { // full Piwigo env already loaded (likely have it), so nothing to do
+			if (isset($conf['lac_consent_duration'])) { $cached = (int)$conf['lac_consent_duration']; if ($debug) { error_log('[LAC DEBUG] duration fallback early reuse $conf = '.$cached.'m'); } return $cached; }
+		}
+		$localConf = [];
+		$prefixeTable = 'piwigo_';
+		@include PHPWG_ROOT_PATH . 'local/config/database.inc.php';
+		if (!empty($localConf['db_host'])) { // unlikely path because variable names differ; keep compatibility guard
+			$dbHost = $localConf['db_host'];
+		}
+		// We also try global $conf style (as used by root index direct include) for consistency
+		if (!empty($conf['db_host'])) {
+			$mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+			if ($mysqli) {
+				$table = ($conf['prefix_table'] ?? ($conf['prefixeTable'] ?? 'piwigo_')) . 'config';
+				// try both prefix forms; if neither defined we already defaulted above
+				if (isset($conf['prefixeTable'])) { $table = $conf['prefixeTable'] . 'config'; }
+				$sql = "SELECT value FROM `".$table."` WHERE param='lac_consent_duration' LIMIT 1";
+				$res = @mysqli_query($mysqli, $sql);
+				if ($res && ($row = mysqli_fetch_assoc($res))) {
+					$cached = (int)$row['value'];
+				}
+				@mysqli_close($mysqli);
+			}
+		}
+	} catch (Throwable $e) { /* swallow */ }
+	if ($debug) { error_log('[LAC DEBUG] duration from DB fallback = '.$cached.'m'); }
+	return $cached;
 }
 
 /**
@@ -38,8 +122,18 @@ function lac_gate_decision(): string
 		}
 		global $conf;
 		if (isset($conf['lac_enabled']) && !$conf['lac_enabled']) { return 'allow'; }
-	if (!lac_is_guest()) { return 'allow'; }
-	return lac_has_consent() ? 'allow' : 'redirect';
+		if (!lac_is_guest()) { return 'allow'; }
+		// Determine duration if present
+		$duration = lac_get_consent_duration();
+		if (lac_has_consent()) {
+			if (lac_consent_expired($duration)) {
+				unset($_SESSION['lac_consent']);
+				unset($_SESSION['lac_consent_granted']);
+				return 'redirect';
+			}
+			return 'allow';
+		}
+		return 'redirect';
 }
 
 /**

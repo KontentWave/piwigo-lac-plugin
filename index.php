@@ -1,17 +1,74 @@
-    <?php
-// Determine if HTTPS is enabled
-$secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443;
+<?php
+    // Define consent root constant early so plugin guard can reliably detect this page
+    if (!defined('LAC_CONSENT_ROOT')) {
+        define('LAC_CONSENT_ROOT', '/index.php');
+    }
+    $debug = (defined('LAC_DEBUG') && LAC_DEBUG) || isset($_GET['lac_debug']);
+    
+    // Determine if HTTPS is enabled (moved up for session configuration)
+    $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443;
+    
+    // Configure secure session parameters BEFORE starting session
+    if (session_status() === PHP_SESSION_NONE) {
+        if ($debug) error_log('[LAC DEBUG] Root: configuring secure session');
+        
+        // Set secure session cookie parameters
+        session_set_cookie_params([
+            'lifetime' => 0,                    // Session cookies (expire on browser close)
+            'path' => '/',                      // Available site-wide
+            'domain' => '',                     // Current domain only
+            'secure' => $secure,                // HTTPS only if available
+            'httponly' => true,                 // Prevent XSS access via JavaScript
+            'samesite' => 'Lax'                // CSRF protection
+        ]);
+        
+        // Set session name to something less predictable
+        session_name('LAC_SESSION');
+        
+        if ($debug) error_log('[LAC DEBUG] Root: start session');
+        session_start();
+        
+        // Regenerate session ID periodically for security
+        if (!isset($_SESSION['lac_session_regenerated']) || 
+            (time() - $_SESSION['lac_session_regenerated']) > 300) { // 5 minutes
+            session_regenerate_id(true);
+            $_SESSION['lac_session_regenerated'] = time();
+            if ($debug) error_log('[LAC DEBUG] Root: session ID regenerated');
+        }
+    } else {
+        if ($debug) error_log('[LAC DEBUG] Root: session already active');
+    }
+    // Accept triggers: legacy field name or our consent buttons; also allow lac_accept=1 for diagnostics
+    $accept = false;
+    if (isset($_POST['consent']) && $_POST['consent']==='18+') { $accept = true; }
+    if (isset($_POST['legal_age'])) { $accept = true; }
+    if (isset($_GET['lac_accept']) && $_GET['lac_accept'] == '1') { $accept = true; }
+    if ($accept) {
+        $_SESSION['lac_consent_granted'] = true; // legacy
+        $_SESSION['lac_consent'] = ['granted' => true, 'timestamp' => time()];
+        $cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
+        $cookieWindow = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400;
+        
+        // Set secure LAC timestamp cookie with proper security attributes
+        setcookie($cookieName, (string)time(), [
+            'expires' => time() + $cookieWindow,
+            'path' => '/',
+            'domain' => '',
+            'secure' => $secure,
+            'httponly' => true,
+            'samesite' => 'Lax'
+        ]);
+        
+        // Regenerate session ID on consent for additional security
+        session_regenerate_id(true);
+        $_SESSION['lac_session_regenerated'] = time();
+        
+        if ($debug) error_log('[LAC DEBUG] Root: consent accepted, session regenerated');
+    }
 
 // Configure session cookie parameters with HttpOnly, Secure, and SameSite attributes
-session_set_cookie_params([
-    'lifetime' => 0,
-    'path' => '/',
-    'domain' => '',
-    'secure' => $secure,
-    'httponly' => true,
-    'samesite' => 'Lax'
-]);
-session_start();
+// Session parameters are now configured before session_start() for better security
+if ($debug) error_log('[LAC DEBUG] Root: session cookie name=' . session_name());
 
 // Determine gallery (Piwigo) directory (hardcoded to ./albums with optional override via .gallerydir)
 $gallerydir_path = __DIR__ . '/.gallerydir';
@@ -44,27 +101,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['redirect'])) {
         $_SESSION['LAC_REDIRECT'] = '/' . trim($galleryDir, './') . '/index.php';
     }
 }
-// 2) If user already has a valid LAC cookie + PHPSESSID, go straight there
-$cookie_lifetime = 86400;
-if (
-    isset($_COOKIE['LAC'], $_COOKIE['PHPSESSID']) &&
-    is_numeric($_COOKIE['LAC']) &&
-    (time() - (int)$_COOKIE['LAC']) < $cookie_lifetime
-) {
-    // mark current session as having granted consent for the gallery/plugin
-    $_SESSION['lac_consent_granted'] = true;
-    // choose the stored redirect or the fallback
-    $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($galleryDir, './') . '/index.php');
-    unset($_SESSION['LAC_REDIRECT']);
-    header("Location: " . $target);
-    exit;
+// 2) Load configuration needed for consent duration (DB direct lightweight)
+$consentDuration = 0; // minutes; 0 = session-only
+try {
+    $conf = [];
+    $prefixeTable = 'piwigo_';
+    @include __DIR__ . '/albums/local/config/database.inc.php';
+    if (!empty($conf['db_host'])) {
+        $mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+        if ($mysqli) {
+            $table = $prefixeTable . 'config';
+            $sql = "SELECT param,value FROM `".$table."` WHERE param IN ('lac_consent_duration')";
+            $res = @mysqli_query($mysqli, $sql);
+            if ($res) {
+                while ($row = mysqli_fetch_assoc($res)) {
+                    if ($row['param'] === 'lac_consent_duration') { $consentDuration = (int)$row['value']; }
+                }
+            }
+            @mysqli_close($mysqli);
+        }
+    }
+} catch (Throwable $e) { /* ignore */ }
+
+// Helper to mark structured consent
+function lac_mark_consent_structured(?int $ts = null) {
+    if ($ts === null || $ts <= 0) { $ts = time(); }
+    $_SESSION['lac_consent'] = ['granted' => true, 'timestamp' => $ts];
+    $_SESSION['lac_consent_granted'] = true; // legacy flag
+}
+
+// 3) If user already has valid cookie+session id, validate duration (Option A strategy)
+$cookie_lifetime = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400; // absolute hard cap for cookie storage
+$cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
+if (isset($_COOKIE[$cookieName], $_COOKIE['PHPSESSID']) && ctype_digit($_COOKIE[$cookieName])) {
+    $cookieTs = (int)$_COOKIE[$cookieName];
+    $cookieAge = time() - $cookieTs;
+    $withinCookieWindow = $cookieAge < $cookie_lifetime;
+    $withinConfiguredWindow = ($consentDuration === 0) || ($cookieAge < ($consentDuration * 60));
+    if ($withinCookieWindow && $withinConfiguredWindow) {
+        // Reuse original cookie timestamp so plugin expiration matches root logic
+        lac_mark_consent_structured($cookieTs);
+        $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($galleryDir, './') . '/index.php');
+        unset($_SESSION['LAC_REDIRECT']);
+        header("Location: " . $target);
+        exit;
+    }
 }
 
 // 3) Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
     if ($_POST['consent'] === '18+') {
         // set new LAC timestamp cookie
-        setcookie("LAC", (string)time(), [
+        $cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
+        setcookie($cookieName, (string)time(), [
             'expires'  => time() + $cookie_lifetime,
             'path'     => '/',
             'domain'   => '',
@@ -72,8 +161,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
             'httponly' => true,
             'samesite' => 'Lax',
         ]);
-        // also set session flag consumed by the Piwigo plugin age gate
-        $_SESSION['lac_consent_granted'] = true;
+        // store structured session consent
+        lac_mark_consent_structured();
 
     // choose the stored redirect or the fallback
     $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($galleryDir, './') . '/index.php');
@@ -115,6 +204,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
         exit;
     }
 }
+
+// Add security headers to protect against session hijacking and other attacks
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('X-XSS-Protection: 1; mode=block');
+header('Referrer-Policy: strict-origin-when-cross-origin');
+if ($secure) {
+    header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+}
+
 ?>
 <!DOCTYPE html>
 <html>

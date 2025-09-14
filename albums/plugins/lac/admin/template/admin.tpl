@@ -25,6 +25,14 @@
         {'Fallback URL'|@translate}:<br />
         <input type="text" name="lac_fallback_url" value="{$LAC_FALLBACK_URL}" size="60" placeholder="https://example.com/too-young" />
       </label>
+      <br /><br />
+      <label>
+        {'Consent Duration'|@translate} (minutes):<br />
+        <input type="number" name="lac_consent_duration" value="{$LAC_CONSENT_DURATION}" min="0" style="width:120px;" />
+      </label>
+      <div class="helper-text" style="font-size:0.9em;color:#666;max-width:520px;">
+        {'Duration (minutes) for which consent remains valid. Set 0 for session-only.'|@translate}
+      </div>
     </fieldset>
     <p>
       <button class="submit" name="lac_settings_submit" value="1">{'Save Settings'|@translate}</button>

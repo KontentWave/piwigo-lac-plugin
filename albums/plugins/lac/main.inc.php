@@ -39,7 +39,11 @@ define('LAC_TABLE',   $prefixeTable . 'lac');
 define('LAC_ADMIN',   get_root_url() . 'admin.php?page=plugin-' . LAC_ID);
 define('LAC_PUBLIC',  get_absolute_root_url() . make_index_url(array('section' => 'lac')) . '/');
 define('LAC_DIR',     PHPWG_ROOT_PATH . PWG_LOCAL_DIR . 'lac/');
-
+// Central lightweight debug toggle: enable by defining LAC_DEBUG in local config
+if (!defined('LAC_DEBUG')) { define('LAC_DEBUG', false); }
+if ( (LAC_DEBUG || isset($_GET['lac_debug'])) ) {
+  error_log('[LAC DEBUG] main.inc.php bootstrap');
+}
 
 
 // +-----------------------------------------------------------------------+

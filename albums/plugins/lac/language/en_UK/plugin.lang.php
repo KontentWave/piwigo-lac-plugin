@@ -9,6 +9,10 @@ $lang['Invalid fallback URL (must start with http:// or https://)'] = 'Invalid f
 $lang['Fallback URL too long (max %d characters)'] = 'Fallback URL too long (max %d characters)';
 $lang['Internal URLs are not allowed as fallback'] = 'Internal URLs are not allowed as fallback';
 $lang['Save Settings'] = 'Save Settings';
+$lang['Consent Duration'] = 'Consent Duration';
+$lang['Duration (minutes) for which consent remains valid. Set 0 for session-only.'] = 'Duration (minutes) for which consent remains valid. Set 0 for session-only.';
+$lang['Invalid consent duration'] = 'Invalid consent duration';
+$lang['Consent duration too large'] = 'Consent duration too large';
 ?><?php
 
 /*
