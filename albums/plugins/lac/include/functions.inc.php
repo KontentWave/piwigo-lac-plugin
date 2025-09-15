@@ -4,6 +4,7 @@ defined('LAC_PATH') or die('Hacking attempt!');
 // Load centralized constants and database helper
 include_once LAC_PATH . 'include/constants.inc.php';
 include_once LAC_PATH . 'include/database_helper.inc.php';
+include_once LAC_PATH . 'include/session_manager.inc.php';
 
 // Legacy constant definitions kept for backward compatibility (now reference centralized definitions)
 // Maximum allowed length for fallback URL (defensive against extremely large inputs)
@@ -63,38 +64,34 @@ function lac_is_guest(): bool
 }
 
 /**
- * Whether the current session signals age consent.
+ * Whether the current session signals age consent (optimized version)
  */
 function lac_has_consent(): bool
 {
-	// Structured consent takes precedence
-	if (!empty($_SESSION['lac_consent']) && is_array($_SESSION['lac_consent'])) {
-		$c = $_SESSION['lac_consent'];
-		return !empty($c['granted']);
+	$sessionManager = LacSessionManager::getInstance();
+	
+	// Quick check for valid consent
+	if (!$sessionManager->hasConsent()) {
+		return false;
 	}
-	// Upgrade legacy flag (for backward compatibility and first acceptance) regardless of duration
-	if (!empty($_SESSION['lac_consent_granted'])) {
-		$_SESSION['lac_consent'] = ['granted' => true, 'timestamp' => time()];
-		if (isset($_GET['lac_debug'])) {
-			error_log('[LAC DEBUG] Upgraded legacy consent flag to structured form');
-		}
-		return true;
+	
+	// Check if consent has expired
+	if ($sessionManager->isConsentExpired()) {
+		$sessionManager->clearConsent();
+		return false;
 	}
-	return false;
+	
+	return true;
 }
 
 /**
- * Evaluate whether consent has expired based on configured duration (minutes).
- * Returns true if expired, false if still valid or session-only with duration 0.
+ * Evaluate whether consent has expired based on configured duration (optimized version)
+ * Uses session manager for efficient checking
  */
 function lac_consent_expired(int $durationMinutes): bool
 {
-	if ($durationMinutes <= 0) { return false; } // session-only
-	if (empty($_SESSION['lac_consent']) || !is_array($_SESSION['lac_consent'])) { return true; }
-	$ts = $_SESSION['lac_consent']['timestamp'] ?? 0;
-	if (!$ts) { return true; }
-	$exp = $ts + ($durationMinutes * 60);
-	return time() >= $exp;
+	$sessionManager = LacSessionManager::getInstance();
+	return $sessionManager->isConsentExpired();
 }
 
 /**

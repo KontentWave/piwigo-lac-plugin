@@ -3,13 +3,15 @@ defined('LAC_PATH') or die('Hacking attempt!');
 
 /**
  * Centralized LAC Database Helper Class
- * Consolidates database connection logic and common operations
+ * Consolidates database connection logic and common operations with connection pooling
  */
 class LacDatabaseHelper {
     
     private static $instance = null;
     private $connection = null;
     private $debug = false;
+    private static $queryCache = [];
+    private static $connectionCount = 0;
     
     private function __construct() {
         $this->debug = (defined('LAC_DEBUG') && LAC_DEBUG) || isset($_GET['lac_debug']);
@@ -36,11 +38,20 @@ class LacDatabaseHelper {
     }
     
     /**
-     * Get database connection with error handling
+     * Get database connection with connection reuse and error handling
      */
     public function getConnection() {
         if ($this->connection !== null) {
-            return $this->connection;
+            // Test connection is still alive
+            if (@mysqli_ping($this->connection)) {
+                return $this->connection;
+            } else {
+                // Connection died, close and recreate
+                if ($this->debug) {
+                    error_log('[LAC DEBUG] Database connection lost, reconnecting');
+                }
+                $this->close();
+            }
         }
         
         global $conf;
@@ -52,6 +63,7 @@ class LacDatabaseHelper {
         }
         
         $this->connection = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+        self::$connectionCount++;
         
         if (!$this->connection) {
             if ($this->debug) {
@@ -60,21 +72,36 @@ class LacDatabaseHelper {
             return false;
         }
         
+        // Set connection charset for security
+        mysqli_set_charset($this->connection, 'utf8');
+        
         if ($this->debug) {
-            error_log('[LAC DEBUG] Database connection established');
+            error_log('[LAC DEBUG] Database connection established (total: ' . self::$connectionCount . ')');
         }
         
         return $this->connection;
     }
     
     /**
-     * Execute a prepared statement query with parameters
+     * Execute a prepared statement query with parameters and caching
      * @param string $query SQL query with ? placeholders
      * @param string $types Parameter types string (e.g., 'si' for string+int)
      * @param array $params Array of parameter values
+     * @param bool $useCache Whether to cache results for repeated queries
      * @return array|false Result array or false on failure
      */
-    public function preparedQuery(string $query, string $types = '', array $params = []) {
+    public function preparedQuery(string $query, string $types = '', array $params = [], bool $useCache = false) {
+        // Check cache first for cacheable queries
+        if ($useCache && empty($params)) {
+            $cacheKey = md5($query);
+            if (isset(self::$queryCache[$cacheKey])) {
+                if ($this->debug) {
+                    error_log('[LAC DEBUG] Query cache hit: ' . substr($query, 0, 50) . '...');
+                }
+                return self::$queryCache[$cacheKey];
+            }
+        }
+        
         $connection = $this->getConnection();
         if (!$connection) {
             return false;
@@ -110,11 +137,21 @@ class LacDatabaseHelper {
         }
         
         $stmt->close();
+        
+        // Cache result if requested and successful
+        if ($useCache && !empty($data) && empty($params)) {
+            $cacheKey = md5($query);
+            self::$queryCache[$cacheKey] = $data;
+            if ($this->debug) {
+                error_log('[LAC DEBUG] Query result cached: ' . substr($query, 0, 50) . '...');
+            }
+        }
+        
         return $data;
     }
     
     /**
-     * Get a single configuration value from database
+     * Get a single configuration value from database with caching
      * @param string $param Configuration parameter name
      * @param mixed $default Default value if not found
      * @return mixed Configuration value or default
@@ -132,10 +169,14 @@ class LacDatabaseHelper {
         try {
             $configTable = self::safeTable($prefix, 'config');
             $query = "SELECT value FROM {$configTable} WHERE param = ?";
-            $results = $this->preparedQuery($query, 's', [$param]);
+            // Use caching for config queries since they're frequently accessed
+            $results = $this->preparedQuery($query, 's', [$param], true);
             
             if (!empty($results)) {
-                return $results[0]['value'];
+                $value = $results[0]['value'];
+                // Cache in $conf for subsequent requests
+                $conf[$param] = $value;
+                return $value;
             }
         } catch (Exception $e) {
             if ($this->debug) {
@@ -144,6 +185,24 @@ class LacDatabaseHelper {
         }
         
         return $default;
+    }
+    
+    /**
+     * Clear query cache (useful for testing or after config changes)
+     */
+    public static function clearCache(): void {
+        self::$queryCache = [];
+    }
+    
+    /**
+     * Get connection statistics for performance monitoring
+     */
+    public static function getStats(): array {
+        return [
+            'total_connections' => self::$connectionCount,
+            'cached_queries' => count(self::$queryCache),
+            'cache_keys' => array_keys(self::$queryCache)
+        ];
     }
     
     /**

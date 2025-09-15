@@ -1,8 +1,9 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
-// Load centralized constants
+// Load centralized constants and optimized helpers
 include_once LAC_PATH . 'include/constants.inc.php';
+include_once LAC_PATH . 'include/session_manager.inc.php';
 
 /**
  * Age Gate Guard
@@ -47,6 +48,9 @@ function lac_age_gate_guard()
     }
   }
 
+  // Initialize optimized session manager
+  $sessionManager = LacSessionManager::getInstance();
+  
   if ($debug_mode) { error_log('[LAC DEBUG] guest_detected='.(lac_is_guest()?1:0)); }
 
   // If user not guest, allow
@@ -54,56 +58,41 @@ function lac_age_gate_guard()
     return;
   }
 
-  // Determine duration (default 0 if not set)
-  $duration = function_exists('lac_get_consent_duration') ? lac_get_consent_duration() : (isset($conf['lac_consent_duration']) ? (int)$conf['lac_consent_duration'] : 0);
-
-  $hasConsent = function_exists('lac_has_consent') ? lac_has_consent() : !empty($_SESSION['lac_consent_granted']);
-  // Cookie reconstruction fallback:
-  // If session markers missing but LAC cookie exists & still valid, rebuild consent.
-  // Rationale: root consent page may have started a session under default name before
-  // Piwigo sets its custom session_name; gallery then sees a fresh session. This prevents loops.
-  if (!$hasConsent && empty($_SESSION[LAC_SESSION_CONSENT_KEY]) && isset($_COOKIE[lac_get_cookie_name()]) && ctype_digit($_COOKIE[lac_get_cookie_name()])) {
+  // Optimized consent checking using session manager
+  $hasConsent = $sessionManager->hasConsent() && !$sessionManager->isConsentExpired();
+  // Cookie reconstruction fallback (optimized):
+  if (!$hasConsent && isset($_COOKIE[lac_get_cookie_name()]) && ctype_digit($_COOKIE[lac_get_cookie_name()])) {
     $cookieTs = (int)$_COOKIE[lac_get_cookie_name()];
     $age = time() - $cookieTs;
-    $cookieValidWindow = lac_get_cookie_max_window(); // absolute cookie max window
+    $cookieValidWindow = lac_get_cookie_max_window();
     $duration = function_exists('lac_get_consent_duration') ? lac_get_consent_duration() : (isset($conf[LAC_CONFIG_CONSENT_DURATION]) ? (int)$conf[LAC_CONFIG_CONSENT_DURATION] : 0);
     $withinCookie = $age < $cookieValidWindow;
     $withinDuration = ($duration === 0) || ($age < ($duration * 60));
+    
     if ($withinCookie && $withinDuration) {
-      $_SESSION[LAC_SESSION_CONSENT_KEY] = ['granted' => true, 'timestamp' => $cookieTs];
-      $_SESSION[LAC_SESSION_CONSENT_LEGACY_KEY] = true; // legacy flag for compatibility
-      
-      // Regenerate session ID when reconstructing consent for security
-      if (function_exists('session_regenerate_id')) {
-        session_regenerate_id(true);
-        $_SESSION[LAC_SESSION_REGENERATED_KEY] = time();
-      }
-      
+      $sessionManager->setConsent($cookieTs);
+      $sessionManager->regenerateIfNeeded();
       $hasConsent = true;
-      if ($debug_mode) { error_log('[LAC DEBUG] Guard: reconstructed consent from cookie (age='.$age.'s), session regenerated'); }
+      
+      if ($debug_mode) { 
+        error_log('[LAC DEBUG] Guard: reconstructed consent from cookie (age='.$age.'s), session regenerated'); 
+      }
     } elseif ($debug_mode) {
       error_log('[LAC DEBUG] Guard: found LAC cookie but invalid (age='.$age.'s withinCookie=' . ($withinCookie?1:0) . ' withinDuration=' . ($withinDuration?1:0) . ' duration='.$duration.'m)');
     }
   }
   if ($hasConsent) {
-    $expired = function_exists('lac_consent_expired') && lac_consent_expired($duration);
-    if ($debug_mode && ($expired || isset($_GET['lac_debug_verbose']))) {
-      $ts = isset($_SESSION['lac_consent']['timestamp']) ? (int)$_SESSION['lac_consent']['timestamp'] : null;
-      $expAt = ($ts && $duration>0) ? $ts + ($duration*60) : null;
-      error_log('[LAC DEBUG] consent check duration=' . $duration . 'm ts=' . ($ts ?: 'null') . ' expAt=' . ($expAt ?: 'n/a') . ' now=' . time() . ' expired=' . ($expired?1:0));
+    // Consent is already validated in session manager, just log if needed
+    if ($debug_mode && isset($_GET['lac_debug_verbose'])) {
+      error_log('[LAC DEBUG] Valid consent found, allowing access');
     }
-    if ($expired) {
-      unset($_SESSION['lac_consent']);
-      unset($_SESSION['lac_consent_granted']);
-      // fall through to redirect logic
-    } else {
-      return; // still valid
-    }
-  } elseif ($debug_mode) {
-    error_log('[LAC DEBUG] hasConsent=0 duration=' . $duration . ' (no consent markers)');
+    return; // Allow access
   }
 
-  if ($debug_mode) { error_log('[LAC DEBUG] redirect_reason=' . ($hasConsent? 'expired_or_cleared':'no_consent')); }
+  // No valid consent found, need to redirect
+  if ($debug_mode) { 
+    error_log('[LAC DEBUG] No valid consent found, redirecting to consent page'); 
+  }
 
   // Avoid redirect loop if already on the consent page itself (defensive) - detect by script filename
   $currentScript = $_SERVER['SCRIPT_NAME'] ?? '';
