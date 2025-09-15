@@ -5,6 +5,12 @@ defined('LAC_PATH') or die('Hacking attempt!');
 if (!defined('LAC_MAX_FALLBACK_URL_LEN')) {
 	define('LAC_MAX_FALLBACK_URL_LEN', 2048);
 }
+if (!defined('LAC_MAX_CONSENT_DURATION')) {
+	define('LAC_MAX_CONSENT_DURATION', 43200); // 30 days in minutes
+}
+if (!defined('LAC_MAX_POST_INPUT_SIZE')) {
+	define('LAC_MAX_POST_INPUT_SIZE', 65536); // 64KB limit for any single POST input
+}
 
 // Provide default for test mode constant to silence undefined constant warnings when referenced.
 if (!defined('LAC_TEST_MODE')) {
@@ -182,22 +188,70 @@ function lac_gate_decision(): string
 
 /**
  * Sanitize fallback URL input; returns sanitized URL or empty string if invalid.
+ * Enhanced validation against multiple attack vectors.
  */
 function lac_sanitize_fallback_url(string $url, bool $disallow_internal = false): string
 {
 	$url = trim($url);
 	if ($url === '') return '';
 	if (strlen($url) > LAC_MAX_FALLBACK_URL_LEN) { return ''; }
-	$san = filter_var($url, FILTER_SANITIZE_URL);
-	if (!$san || !preg_match('#^https?://#i', $san)) { return ''; }
-	if ($disallow_internal) {
-		// Determine current host if available and compare host parts case-insensitively
-		$currentHost = $_SERVER['HTTP_HOST'] ?? '';
-		$parsed = parse_url($san);
-		if (!empty($currentHost) && isset($parsed['host']) && strcasecmp($parsed['host'], $currentHost) === 0) {
-			return ''; // internal URL not allowed
+	
+	// Check for dangerous schemes first
+	$dangerous_schemes = ['javascript:', 'data:', 'vbscript:', 'file:', 'ftp:', 'mailto:', 'news:', 'gopher:'];
+	foreach ($dangerous_schemes as $scheme) {
+		if (stripos($url, $scheme) === 0) {
+			return ''; // Reject dangerous schemes
 		}
 	}
+	
+	// Check for encoded dangerous schemes (basic URL encoding bypass prevention)
+	$encoded_js = ['%6a%61%76%61%73%63%72%69%70%74%3a', '%64%61%74%61%3a']; // javascript:, data:
+	foreach ($encoded_js as $encoded) {
+		if (stripos($url, $encoded) !== false) {
+			return '';
+		}
+	}
+	
+	$san = filter_var($url, FILTER_SANITIZE_URL);
+	if (!$san || !preg_match('#^https?://#i', $san)) { return ''; }
+	
+	// Parse URL for additional security checks
+	$parsed = parse_url($san);
+	if (!$parsed || !isset($parsed['host'])) {
+		return ''; // Invalid URL structure
+	}
+	
+	// Check for path traversal attempts in path
+	if (isset($parsed['path']) && (strpos($parsed['path'], '..') !== false || strpos($parsed['path'], '//') !== false)) {
+		return ''; // Path traversal attempt
+	}
+	
+	// Check for suspicious query parameters that could be used for attacks
+	if (isset($parsed['query'])) {
+		$suspicious_params = ['<script', 'javascript:', 'vbscript:', 'onload=', 'onerror=', 'eval('];
+		foreach ($suspicious_params as $param) {
+			if (stripos($parsed['query'], $param) !== false) {
+				return ''; // Suspicious query parameter
+			}
+		}
+	}
+	
+	// Check for internal URLs if requested
+	if ($disallow_internal) {
+		$currentHost = $_SERVER['HTTP_HOST'] ?? '';
+		if (!empty($currentHost) && strcasecmp($parsed['host'], $currentHost) === 0) {
+			return ''; // internal URL not allowed
+		}
+		
+		// Also block localhost, 127.0.0.1, and private IP ranges
+		if (in_array(strtolower($parsed['host']), ['localhost', '127.0.0.1', '0.0.0.0']) ||
+		    preg_match('/^192\.168\./', $parsed['host']) ||
+		    preg_match('/^10\./', $parsed['host']) ||
+		    preg_match('/^172\.(1[6-9]|2[0-9]|3[0-1])\./', $parsed['host'])) {
+			return ''; // Private/local addresses not allowed
+		}
+	}
+	
 	return $san;
 }
 

@@ -27,12 +27,22 @@ $tabsheet->assign();
 
 
 /* Initialisation */
+$image_id = (int)$_GET['image_id']; // Cast to int for safety after check_input_parameter validation
 $query = '
 SELECT *
   FROM '.IMAGES_TABLE.'
-  WHERE id = '.$_GET['image_id'].'
-;';
-$picture = pwg_db_fetch_assoc(pwg_query($query));
+  WHERE id = ?
+';
+$stmt = $pwg_db_link->prepare($query);
+if ($stmt) {
+  $stmt->bind_param('i', $image_id);
+  $stmt->execute();
+  $result = $stmt->get_result();
+  $picture = $result ? $result->fetch_assoc() : false;
+  $stmt->close();
+} else {
+  $picture = false;
+}
 
 
 # DO SOME STUFF HERE... or not !

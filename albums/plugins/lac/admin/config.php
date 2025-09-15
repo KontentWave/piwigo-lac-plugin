@@ -25,27 +25,55 @@ $fallback = (string)$conf['lac_fallback_url'];
 $duration = (int)$conf['lac_consent_duration'];
 
 if (isset($_POST['lac_settings_submit'])) {
-  check_pwg_token();
-  $enabled = isset($_POST['lac_enabled']);
-  $raw = $_POST['lac_fallback_url'] ?? '';
-  // Consent duration field processing
-  if (isset($_POST['lac_consent_duration'])) {
-    $rawDur = trim($_POST['lac_consent_duration']);
-    if ($rawDur === '') {
-      $duration = 0;
-    } elseif (ctype_digit($rawDur)) {
-      // optional upper bound to prevent absurd values (e.g. > 43200 minutes ~ 30 days) - choose generous cap
-      $val = (int)$rawDur;
-      if ($val > 43200) { // 30 days
-        $page['errors'][] = l10n('Consent duration too large');
-      } else {
-        $duration = $val;
-      }
-    } else {
-      $page['errors'][] = l10n('Invalid consent duration');
+  // Enhanced CSRF protection validation
+  if (!function_exists('check_pwg_token') || !function_exists('get_pwg_token')) {
+    $page['errors'][] = l10n('Security token functions not available');
+  } elseif (empty($_POST['pwg_token'])) {
+    $page['errors'][] = l10n('Missing security token - form submission rejected');
+  } else {
+    try {
+      check_pwg_token();
+    } catch (Exception $e) {
+      $page['errors'][] = l10n('Invalid security token - form may have expired');
     }
   }
-  if ($raw !== '') {
+  
+  // Only proceed if CSRF validation passed
+  if (empty($page['errors'])) {
+  
+  // Validate input sizes to prevent DoS via large inputs
+  foreach (['lac_fallback_url', 'lac_consent_duration'] as $field) {
+    if (isset($_POST[$field]) && strlen($_POST[$field]) > LAC_MAX_POST_INPUT_SIZE) {
+      $page['errors'][] = sprintf(l10n('Input field %s too large (max %d bytes)'), $field, LAC_MAX_POST_INPUT_SIZE);
+      break; // Exit early on size violation
+    }
+  }
+  
+  if (empty($page['errors'])) { // Only process if no size violations
+    $enabled = isset($_POST['lac_enabled']);
+    $raw = $_POST['lac_fallback_url'] ?? '';
+    
+    // Consent duration field processing with enhanced validation
+    if (isset($_POST['lac_consent_duration'])) {
+      $rawDur = trim($_POST['lac_consent_duration']);
+      if ($rawDur === '') {
+        $duration = 0;
+      } elseif (ctype_digit($rawDur)) {
+        $val = (int)$rawDur;
+        if ($val > LAC_MAX_CONSENT_DURATION) {
+          $page['errors'][] = sprintf(l10n('Consent duration too large (max %d minutes)'), LAC_MAX_CONSENT_DURATION);
+        } elseif ($val < 0) {
+          $page['errors'][] = l10n('Consent duration cannot be negative');
+        } else {
+          $duration = $val;
+        }
+      } else {
+        $page['errors'][] = l10n('Invalid consent duration (must be a positive number)');
+      }
+    }
+    
+    // URL validation (only if no input size violations)
+    if ($raw !== '') {
     $tooLong = (strlen($raw) > (defined('LAC_MAX_FALLBACK_URL_LEN') ? LAC_MAX_FALLBACK_URL_LEN : 2048));
     $san = function_exists('lac_sanitize_fallback_url') ? lac_sanitize_fallback_url($raw, true) : '';
     if ($tooLong) {
@@ -65,6 +93,8 @@ if (isset($_POST['lac_settings_submit'])) {
   } else {
     $fallback = '';
   }
+  } // End of "if no size violations" block
+  
   if (empty($page['errors'])) {
     $conf['lac_enabled'] = $enabled;
     $conf['lac_fallback_url'] = $fallback;
@@ -78,6 +108,7 @@ if (isset($_POST['lac_settings_submit'])) {
     // DB-only storage succeeded; inform user (file persistence deprecated)
     $page['infos'][] = l10n('Settings saved');
   }
+  } // End CSRF validation block
 }
 
 $template->assign(array(
