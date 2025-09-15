@@ -1,6 +1,10 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
+// Load centralized constants and database helper
+include_once LAC_PATH . 'include/constants.inc.php';
+include_once LAC_PATH . 'include/database_helper.inc.php';
+
 // Ensure required globals are accessible when this file is included from different scopes (e.g., tests)
 global $conf, $page, $template;
 if (!isset($page) || !is_array($page)) { $page = []; }
@@ -17,12 +21,12 @@ if (!function_exists('lac_sanitize_fallback_url') && file_exists(LAC_PATH.'inclu
 
 // Age Gate settings (Phase 2)
 // Retrieve current settings from $conf with sane defaults
-if (!isset($conf['lac_enabled'])) { $conf['lac_enabled'] = true; }
-if (!isset($conf['lac_fallback_url'])) { $conf['lac_fallback_url'] = ''; }
-if (!isset($conf['lac_consent_duration'])) { $conf['lac_consent_duration'] = 0; }
-$enabled  = (bool)$conf['lac_enabled'];
-$fallback = (string)$conf['lac_fallback_url'];
-$duration = (int)$conf['lac_consent_duration'];
+if (!isset($conf[LAC_CONFIG_ENABLED])) { $conf[LAC_CONFIG_ENABLED] = true; }
+if (!isset($conf[LAC_CONFIG_FALLBACK_URL])) { $conf[LAC_CONFIG_FALLBACK_URL] = ''; }
+if (!isset($conf[LAC_CONFIG_CONSENT_DURATION])) { $conf[LAC_CONFIG_CONSENT_DURATION] = 0; }
+$enabled  = (bool)$conf[LAC_CONFIG_ENABLED];
+$fallback = (string)$conf[LAC_CONFIG_FALLBACK_URL];
+$duration = (int)$conf[LAC_CONFIG_CONSENT_DURATION];
 
 if (isset($_POST['lac_settings_submit'])) {
   // Enhanced CSRF protection validation
@@ -96,14 +100,14 @@ if (isset($_POST['lac_settings_submit'])) {
   } // End of "if no size violations" block
   
   if (empty($page['errors'])) {
-    $conf['lac_enabled'] = $enabled;
-    $conf['lac_fallback_url'] = $fallback;
-    $conf['lac_consent_duration'] = $duration;
+    $conf[LAC_CONFIG_ENABLED] = $enabled;
+    $conf[LAC_CONFIG_FALLBACK_URL] = $fallback;
+    $conf[LAC_CONFIG_CONSENT_DURATION] = $duration;
     // Persist to database
     if (function_exists('conf_update_param')) {
-      conf_update_param('lac_enabled', $conf['lac_enabled']);
-      conf_update_param('lac_fallback_url', $conf['lac_fallback_url']);
-      conf_update_param('lac_consent_duration', $conf['lac_consent_duration']);
+      conf_update_param(LAC_CONFIG_ENABLED, $conf[LAC_CONFIG_ENABLED]);
+      conf_update_param(LAC_CONFIG_FALLBACK_URL, $conf[LAC_CONFIG_FALLBACK_URL]);
+      conf_update_param(LAC_CONFIG_CONSENT_DURATION, $conf[LAC_CONFIG_CONSENT_DURATION]);
     }
     // DB-only storage succeeded; inform user (file persistence deprecated)
     $page['infos'][] = l10n('Settings saved');

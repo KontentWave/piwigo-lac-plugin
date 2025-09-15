@@ -1,6 +1,11 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
+// Load centralized constants and database helper
+include_once LAC_PATH . 'include/constants.inc.php';
+include_once LAC_PATH . 'include/database_helper.inc.php';
+
+// Legacy constant definitions kept for backward compatibility (now reference centralized definitions)
 // Maximum allowed length for fallback URL (defensive against extremely large inputs)
 if (!defined('LAC_MAX_FALLBACK_URL_LEN')) {
 	define('LAC_MAX_FALLBACK_URL_LEN', 2048);
@@ -29,8 +34,8 @@ if (!defined('LAC_COOKIE_MAX_WINDOW')) { define('LAC_COOKIE_MAX_WINDOW', 86400);
 if (!function_exists('lac_set_consent_cookie')) {
 function lac_set_consent_cookie(int $timestamp, ?bool $secureOverride = null): void
 {
-	$cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
-	$window = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400;
+	$cookieName = lac_get_cookie_name();
+	$window = lac_get_cookie_max_window();
 	$secure = $secureOverride;
 	if ($secure === null) {
 		$secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
@@ -99,67 +104,39 @@ function lac_consent_expired(int $durationMinutes): bool
 function lac_get_consent_duration(): int
 {
 	global $conf;
-	$debug = (defined('LAC_DEBUG') && LAC_DEBUG) || isset($_GET['lac_debug']);
-	if (isset($conf['lac_consent_duration'])) {
-		$val = (int)$conf['lac_consent_duration'];
+	$debug = lac_is_debug_mode();
+	
+	if (isset($conf[LAC_CONFIG_CONSENT_DURATION])) {
+		$val = (int)$conf[LAC_CONFIG_CONSENT_DURATION];
 		if ($val > 0) {
 			if ($debug) { error_log('[LAC DEBUG] duration from $conf = '.$val.'m'); }
 			return $val;
 		}
 		// value is 0 -> attempt DB fallback below
 	}
-	static $fetched = false; static $cached = 0;
+	
+	static $fetched = false; 
+	static $cached = 0;
 	if ($fetched) { return $cached; }
 	$fetched = true;
-	// Attempt lightweight direct DB read mirroring root index approach
+	
+	// Use centralized database helper for fallback lookup
 	try {
-		if (isset($conf['db_host'])) { // full Piwigo env already loaded (likely have it), so nothing to do
-			if (isset($conf['lac_consent_duration'])) { $cached = (int)$conf['lac_consent_duration']; if ($debug) { error_log('[LAC DEBUG] duration fallback early reuse $conf = '.$cached.'m'); } return $cached; }
+		$dbHelper = LacDatabaseHelper::getInstance();
+		$value = $dbHelper->getConfigParam(LAC_CONFIG_CONSENT_DURATION, 0);
+		$cached = (int)$value;
+		
+		if ($debug) { 
+			error_log('[LAC DEBUG] duration from DB fallback = '.$cached.'m'); 
 		}
-		$localConf = [];
-		$prefixeTable = 'piwigo_';
-		if (file_exists(PHPWG_ROOT_PATH . 'local/config/database.inc.php')) {
-			include PHPWG_ROOT_PATH . 'local/config/database.inc.php';
+		
+		return $cached;
+	} catch (Exception $e) {
+		if ($debug) {
+			error_log('[LAC DEBUG] duration fallback failed: ' . $e->getMessage());
 		}
-		if (!empty($localConf['db_host'])) { // unlikely path because variable names differ; keep compatibility guard
-			$dbHost = $localConf['db_host'];
-		}
-		// We also try global $conf style (as used by root index direct include) for consistency
-		if (!empty($conf['db_host'])) {
-			// Local helper duplication (cannot rely on root index bootstrap here)
-			if (!function_exists('lac_safe_table')) {
-				function lac_safe_table(string $prefix, string $name): string {
-					if (!preg_match('/^[A-Za-z0-9_]+$/', $prefix)) { $prefix = 'piwigo_'; }
-					return $prefix . $name;
-				}
-			}
-			$mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
-			if ($mysqli) {
-				$prefix = $conf['prefix_table'] ?? ($conf['prefixeTable'] ?? 'piwigo_');
-				$configTable = lac_safe_table($prefix, 'config');
-				$stmt = mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
-				if ($stmt) {
-					$param = 'lac_consent_duration';
-					if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
-						$res = mysqli_stmt_get_result($stmt);
-						if ($res && ($row = mysqli_fetch_assoc($res))) {
-							$cached = (int)$row['value'];
-						}
-					}
-					mysqli_stmt_close($stmt);
-				} else if ($debug) {
-					error_log('[LAC DEBUG] Failed to prepare duration query in fallback: ' . mysqli_error($mysqli));
-				}
-				mysqli_close($mysqli);
-			} else if ($debug) {
-				error_log('[LAC DEBUG] Database connection failed in duration fallback');
-			}
-		}
-	} catch (Throwable $e) { 
-		if ($debug) { error_log('[LAC DEBUG] Error in duration fallback: ' . $e->getMessage()); }
+		return 0; // Default to session-only consent
 	}
-	if ($debug) { error_log('[LAC DEBUG] duration from DB fallback = '.$cached.'m'); }
-	return $cached;
 }
 
 /**

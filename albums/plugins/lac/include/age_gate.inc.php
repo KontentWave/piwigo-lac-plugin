@@ -1,6 +1,9 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
+// Load centralized constants
+include_once LAC_PATH . 'include/constants.inc.php';
+
 /**
  * Age Gate Guard
  * Runs on init for public side. Redirects guest users without granted consent.
@@ -59,21 +62,21 @@ function lac_age_gate_guard()
   // If session markers missing but LAC cookie exists & still valid, rebuild consent.
   // Rationale: root consent page may have started a session under default name before
   // Piwigo sets its custom session_name; gallery then sees a fresh session. This prevents loops.
-  if (!$hasConsent && empty($_SESSION['lac_consent']) && isset($_COOKIE[(defined('LAC_COOKIE_NAME')?LAC_COOKIE_NAME:'LAC')]) && ctype_digit($_COOKIE[(defined('LAC_COOKIE_NAME')?LAC_COOKIE_NAME:'LAC')])) {
-    $cookieTs = (int)$_COOKIE[(defined('LAC_COOKIE_NAME')?LAC_COOKIE_NAME:'LAC')];
+  if (!$hasConsent && empty($_SESSION[LAC_SESSION_CONSENT_KEY]) && isset($_COOKIE[lac_get_cookie_name()]) && ctype_digit($_COOKIE[lac_get_cookie_name()])) {
+    $cookieTs = (int)$_COOKIE[lac_get_cookie_name()];
     $age = time() - $cookieTs;
-    $cookieValidWindow = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400; // absolute cookie max window
-    $duration = function_exists('lac_get_consent_duration') ? lac_get_consent_duration() : (isset($conf['lac_consent_duration']) ? (int)$conf['lac_consent_duration'] : 0);
+    $cookieValidWindow = lac_get_cookie_max_window(); // absolute cookie max window
+    $duration = function_exists('lac_get_consent_duration') ? lac_get_consent_duration() : (isset($conf[LAC_CONFIG_CONSENT_DURATION]) ? (int)$conf[LAC_CONFIG_CONSENT_DURATION] : 0);
     $withinCookie = $age < $cookieValidWindow;
     $withinDuration = ($duration === 0) || ($age < ($duration * 60));
     if ($withinCookie && $withinDuration) {
-      $_SESSION['lac_consent'] = ['granted' => true, 'timestamp' => $cookieTs];
-      $_SESSION['lac_consent_granted'] = true; // legacy flag for compatibility
+      $_SESSION[LAC_SESSION_CONSENT_KEY] = ['granted' => true, 'timestamp' => $cookieTs];
+      $_SESSION[LAC_SESSION_CONSENT_LEGACY_KEY] = true; // legacy flag for compatibility
       
       // Regenerate session ID when reconstructing consent for security
       if (function_exists('session_regenerate_id')) {
         session_regenerate_id(true);
-        $_SESSION['lac_session_regenerated'] = time();
+        $_SESSION[LAC_SESSION_REGENERATED_KEY] = time();
       }
       
       $hasConsent = true;
