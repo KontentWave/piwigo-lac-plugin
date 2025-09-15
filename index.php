@@ -101,6 +101,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['redirect'])) {
         $_SESSION['LAC_REDIRECT'] = '/' . trim($galleryDir, './') . '/index.php';
     }
 }
+// Helper: validate table prefix (allow only alnum + underscore) and append suffix
+if (!function_exists('lac_safe_table')) {
+    function lac_safe_table(string $prefix, string $name): string {
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $prefix)) { $prefix = 'piwigo_'; }
+        return $prefix . $name;
+    }
+}
+
 // 2) Load configuration needed for consent duration (DB direct lightweight)
 $consentDuration = 0; // minutes; 0 = session-only
 try {
@@ -110,18 +118,24 @@ try {
     if (!empty($conf['db_host'])) {
         $mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
         if ($mysqli) {
-            $table = $prefixeTable . 'config';
-            $sql = "SELECT param,value FROM `".$table."` WHERE param IN ('lac_consent_duration')";
-            $res = @mysqli_query($mysqli, $sql);
-            if ($res) {
-                while ($row = mysqli_fetch_assoc($res)) {
-                    if ($row['param'] === 'lac_consent_duration') { $consentDuration = (int)$row['value']; }
+            $configTable = lac_safe_table($prefixeTable, 'config');
+            // Use prepared statement even though param list is static (defensive consistency)
+            $stmt = @mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+            if ($stmt) {
+                $param = 'lac_consent_duration';
+                @mysqli_stmt_bind_param($stmt, 's', $param);
+                if (@mysqli_stmt_execute($stmt)) {
+                    $res = @mysqli_stmt_get_result($stmt);
+                    if ($res && ($row = mysqli_fetch_assoc($res))) {
+                        $consentDuration = (int)$row['value'];
+                    }
                 }
+                @mysqli_stmt_close($stmt);
             }
             @mysqli_close($mysqli);
         }
     }
-} catch (Throwable $e) { /* ignore */ }
+} catch (Throwable $e) { /* swallow; defaults remain */ }
 
 // Helper to mark structured consent
 function lac_mark_consent_structured(?int $ts = null) {
@@ -182,13 +196,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
             if (!empty($conf['db_host'])) {
                 $mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
                 if ($mysqli) {
-                    $table = $prefixeTable . 'config';
-                    $sql = "SELECT value FROM `".$table."` WHERE param='lac_fallback_url' LIMIT 1";
-                    $res = @mysqli_query($mysqli, $sql);
-                    if ($res && ($row = mysqli_fetch_assoc($res))) {
-                        $val = $row['value'];
-                        if ($val === 'false') { $val = ''; }
-                        if ($val !== 'true' && $val !== 'false') { $configuredFallback = trim($val); }
+                    $configTable = lac_safe_table($prefixeTable, 'config');
+                    $stmt = @mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+                    if ($stmt) {
+                        $param = 'lac_fallback_url';
+                        @mysqli_stmt_bind_param($stmt, 's', $param);
+                        if (@mysqli_stmt_execute($stmt)) {
+                            $res = @mysqli_stmt_get_result($stmt);
+                            if ($res && ($row = mysqli_fetch_assoc($res))) {
+                                $val = $row['value'];
+                                if ($val === 'false') { $val = ''; }
+                                if ($val !== 'true' && $val !== 'false') { $configuredFallback = trim($val); }
+                            }
+                        }
+                        @mysqli_stmt_close($stmt);
                     }
                     @mysqli_close($mysqli);
                 }

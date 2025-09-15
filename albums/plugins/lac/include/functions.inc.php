@@ -94,15 +94,28 @@ function lac_get_consent_duration(): int
 		}
 		// We also try global $conf style (as used by root index direct include) for consistency
 		if (!empty($conf['db_host'])) {
+			// Local helper duplication (cannot rely on root index bootstrap here)
+			if (!function_exists('lac_safe_table')) {
+				function lac_safe_table(string $prefix, string $name): string {
+					if (!preg_match('/^[A-Za-z0-9_]+$/', $prefix)) { $prefix = 'piwigo_'; }
+					return $prefix . $name;
+				}
+			}
 			$mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
 			if ($mysqli) {
-				$table = ($conf['prefix_table'] ?? ($conf['prefixeTable'] ?? 'piwigo_')) . 'config';
-				// try both prefix forms; if neither defined we already defaulted above
-				if (isset($conf['prefixeTable'])) { $table = $conf['prefixeTable'] . 'config'; }
-				$sql = "SELECT value FROM `".$table."` WHERE param='lac_consent_duration' LIMIT 1";
-				$res = @mysqli_query($mysqli, $sql);
-				if ($res && ($row = mysqli_fetch_assoc($res))) {
-					$cached = (int)$row['value'];
+				$prefix = $conf['prefix_table'] ?? ($conf['prefixeTable'] ?? 'piwigo_');
+				$configTable = lac_safe_table($prefix, 'config');
+				$stmt = @mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+				if ($stmt) {
+					$param = 'lac_consent_duration';
+					@mysqli_stmt_bind_param($stmt, 's', $param);
+					if (@mysqli_stmt_execute($stmt)) {
+						$res = @mysqli_stmt_get_result($stmt);
+						if ($res && ($row = mysqli_fetch_assoc($res))) {
+							$cached = (int)$row['value'];
+						}
+					}
+					@mysqli_stmt_close($stmt);
 				}
 				@mysqli_close($mysqli);
 			}
