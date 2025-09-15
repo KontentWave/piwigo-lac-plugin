@@ -1,13 +1,18 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
-// Load centralized constants and database helper
+// Load centralized constants, database helper, and error handler
 include_once LAC_PATH . 'include/constants.inc.php';
 include_once LAC_PATH . 'include/database_helper.inc.php';
+include_once LAC_PATH . 'include/error_handler.inc.php';
 
 // Ensure required globals are accessible when this file is included from different scopes (e.g., tests)
 global $conf, $page, $template;
 if (!isset($page) || !is_array($page)) { $page = []; }
+
+// Initialize error handler and database helper using singleton pattern
+$errorHandler = LacErrorHandler::getInstance();
+$dbHelper = LacDatabaseHelper::getInstance();
 
 // Ensure shared helper functions (including sanitizer) are available in admin context
 // In normal Piwigo runtime functions.inc.php may not yet be loaded here.
@@ -16,8 +21,107 @@ if (!function_exists('lac_sanitize_fallback_url') && file_exists(LAC_PATH.'inclu
 }
 
 // +-----------------------------------------------------------------------+
-// | Configuration tab                                                     |
+// | Configuration tab with standardized error handling                   |
 // +-----------------------------------------------------------------------+
+
+/**
+ * Validate configuration form inputs with standardized error handling
+ * @param array $postData POST data to validate
+ * @return array Result with success/error information
+ */
+function lac_validate_config_form(array $postData): array {
+  $errorHandler = LacErrorHandler::getInstance();
+  
+  $errors = [];
+  $validated = [];
+  
+  try {
+    // Validate enabled checkbox
+    $validated['enabled'] = isset($postData['lac_enabled']);
+    
+    // Validate fallback URL
+    $rawUrl = $postData['lac_fallback_url'] ?? '';
+    $urlValidation = $errorHandler->validateInput($rawUrl, 'string', ['max_length' => LAC_MAX_FALLBACK_URL_LEN]);
+    
+    if (!$urlValidation['success']) {
+      $errors[] = 'Fallback URL: ' . $urlValidation['error'];
+    } else {
+      if ($rawUrl !== '') {
+        $sanitized = function_exists('lac_sanitize_fallback_url') ? lac_sanitize_fallback_url($rawUrl, true) : '';
+        if ($sanitized === '') {
+          // Determine if reason is internal host vs generic invalid
+          $host = $_SERVER['HTTP_HOST'] ?? '';
+          $p = parse_url($rawUrl);
+          if (!empty($host) && isset($p['host']) && strcasecmp($p['host'], $host) === 0) {
+            $errors[] = l10n('Internal URLs are not allowed as fallback');
+          } else {
+            $errors[] = l10n('Invalid fallback URL (must start with http:// or https://)');
+          }
+        } else {
+          $validated['fallback_url'] = $sanitized;
+        }
+      } else {
+        $validated['fallback_url'] = '';
+      }
+    }
+    
+    // Validate consent duration
+    $rawDuration = trim($postData['lac_consent_duration'] ?? '');
+    if ($rawDuration === '') {
+      $validated['consent_duration'] = 0;
+    } else {
+      $durationValidation = $errorHandler->validateInput($rawDuration, 'integer', [
+        'min' => 0,
+        'max' => LAC_MAX_CONSENT_DURATION
+      ]);
+      
+      if (!$durationValidation['success']) {
+        $errors[] = 'Consent duration: ' . $durationValidation['error'];
+      } else {
+        $validated['consent_duration'] = (int)$rawDuration;
+      }
+    }
+    
+    if (!empty($errors)) {
+      return LacErrorHandler::error('Form validation failed', 'VALIDATION_ERROR', ['errors' => $errors]);
+    }
+    
+    return LacErrorHandler::success($validated);
+    
+  } catch (Exception $e) {
+    return LacErrorHandler::error('Form validation failed: ' . $e->getMessage(), 'VALIDATION_ERROR');
+  }
+}
+
+/**
+ * Save configuration settings with standardized error handling
+ * @param array $settings Validated settings to save
+ * @return array Result with success/error information
+ */
+function lac_save_config_settings(array $settings): array {
+  global $conf, $dbHelper;
+  
+  try {
+    // Update global configuration
+    $conf[LAC_CONFIG_ENABLED] = $settings['enabled'];
+    $conf[LAC_CONFIG_FALLBACK_URL] = $settings['fallback_url'];
+    $conf[LAC_CONFIG_CONSENT_DURATION] = $settings['consent_duration'];
+    
+    // Persist to database
+    if (function_exists('conf_update_param')) {
+      conf_update_param(LAC_CONFIG_ENABLED, $conf[LAC_CONFIG_ENABLED]);
+      conf_update_param(LAC_CONFIG_FALLBACK_URL, $conf[LAC_CONFIG_FALLBACK_URL]);
+      conf_update_param(LAC_CONFIG_CONSENT_DURATION, $conf[LAC_CONFIG_CONSENT_DURATION]);
+      
+      return LacErrorHandler::success(null, ['settings_saved' => 3]);
+    } else {
+      return LacErrorHandler::error('Configuration update function not available', 'CONFIG_ERROR');
+    }
+    
+  } catch (Exception $e) {
+    return LacErrorHandler::error('Failed to save configuration: ' . $e->getMessage(), 'CONFIG_ERROR');
+  }
+}
 
 // Age Gate settings (Phase 2)
 // Retrieve current settings from $conf with sane defaults
@@ -37,82 +141,36 @@ if (isset($_POST['lac_settings_submit'])) {
   } else {
     try {
       check_pwg_token();
+      
+      // Validate form data using standardized error handling
+      $validationResult = lac_validate_config_form($_POST);
+      
+      if (!$validationResult['success']) {
+        if (isset($validationResult['data']['errors'])) {
+          $page['errors'] = array_merge($page['errors'], $validationResult['data']['errors']);
+        } else {
+          $page['errors'][] = $validationResult['message'];
+        }
+      } else {
+        // Save settings using standardized error handling
+        $saveResult = lac_save_config_settings($validationResult['data']);
+        
+        if (!$saveResult['success']) {
+          $page['errors'][] = $saveResult['message'];
+        } else {
+          // Update local variables for display
+          $enabled = $validationResult['data']['enabled'];
+          $fallback = $validationResult['data']['fallback_url'];
+          $duration = $validationResult['data']['consent_duration'];
+          
+          $page['infos'][] = l10n('Settings saved');
+        }
+      }
+      
     } catch (Exception $e) {
       $page['errors'][] = l10n('Invalid security token - form may have expired');
     }
   }
-  
-  // Only proceed if CSRF validation passed
-  if (empty($page['errors'])) {
-  
-  // Validate input sizes to prevent DoS via large inputs
-  foreach (['lac_fallback_url', 'lac_consent_duration'] as $field) {
-    if (isset($_POST[$field]) && strlen($_POST[$field]) > LAC_MAX_POST_INPUT_SIZE) {
-      $page['errors'][] = sprintf(l10n('Input field %s too large (max %d bytes)'), $field, LAC_MAX_POST_INPUT_SIZE);
-      break; // Exit early on size violation
-    }
-  }
-  
-  if (empty($page['errors'])) { // Only process if no size violations
-    $enabled = isset($_POST['lac_enabled']);
-    $raw = $_POST['lac_fallback_url'] ?? '';
-    
-    // Consent duration field processing with enhanced validation
-    if (isset($_POST['lac_consent_duration'])) {
-      $rawDur = trim($_POST['lac_consent_duration']);
-      if ($rawDur === '') {
-        $duration = 0;
-      } elseif (ctype_digit($rawDur)) {
-        $val = (int)$rawDur;
-        if ($val > LAC_MAX_CONSENT_DURATION) {
-          $page['errors'][] = sprintf(l10n('Consent duration too large (max %d minutes)'), LAC_MAX_CONSENT_DURATION);
-        } elseif ($val < 0) {
-          $page['errors'][] = l10n('Consent duration cannot be negative');
-        } else {
-          $duration = $val;
-        }
-      } else {
-        $page['errors'][] = l10n('Invalid consent duration (must be a positive number)');
-      }
-    }
-    
-    // URL validation (only if no input size violations)
-    if ($raw !== '') {
-    $tooLong = (strlen($raw) > (defined('LAC_MAX_FALLBACK_URL_LEN') ? LAC_MAX_FALLBACK_URL_LEN : 2048));
-    $san = function_exists('lac_sanitize_fallback_url') ? lac_sanitize_fallback_url($raw, true) : '';
-    if ($tooLong) {
-      $page['errors'][] = sprintf(l10n('Fallback URL too long (max %d characters)'), (defined('LAC_MAX_FALLBACK_URL_LEN') ? LAC_MAX_FALLBACK_URL_LEN : 2048));
-    } elseif ($san === '') {
-      // Determine if reason is internal host vs generic invalid
-      $host = $_SERVER['HTTP_HOST'] ?? '';
-      $p = parse_url($raw);
-      if (!empty($host) && isset($p['host']) && strcasecmp($p['host'], $host) === 0) {
-        $page['errors'][] = l10n('Internal URLs are not allowed as fallback');
-      } else {
-        $page['errors'][] = l10n('Invalid fallback URL (must start with http:// or https://)');
-      }
-    } else {
-      $fallback = $san;
-    }
-  } else {
-    $fallback = '';
-  }
-  } // End of "if no size violations" block
-  
-  if (empty($page['errors'])) {
-    $conf[LAC_CONFIG_ENABLED] = $enabled;
-    $conf[LAC_CONFIG_FALLBACK_URL] = $fallback;
-    $conf[LAC_CONFIG_CONSENT_DURATION] = $duration;
-    // Persist to database
-    if (function_exists('conf_update_param')) {
-      conf_update_param(LAC_CONFIG_ENABLED, $conf[LAC_CONFIG_ENABLED]);
-      conf_update_param(LAC_CONFIG_FALLBACK_URL, $conf[LAC_CONFIG_FALLBACK_URL]);
-      conf_update_param(LAC_CONFIG_CONSENT_DURATION, $conf[LAC_CONFIG_CONSENT_DURATION]);
-    }
-    // DB-only storage succeeded; inform user (file persistence deprecated)
-    $page['infos'][] = l10n('Settings saved');
-  }
-  } // End CSRF validation block
 }
 
 $template->assign(array(

@@ -1,6 +1,9 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
+// Load centralized error handling
+include_once LAC_PATH . 'include/error_handler.inc.php';
+
 /**
  * Centralized LAC Database Helper Class
  * Consolidates database connection logic and common operations with connection pooling
@@ -12,9 +15,11 @@ class LacDatabaseHelper {
     private $debug = false;
     private static $queryCache = [];
     private static $connectionCount = 0;
+    private $errorHandler = null;
     
     private function __construct() {
         $this->debug = (defined('LAC_DEBUG') && LAC_DEBUG) || isset($_GET['lac_debug']);
+        $this->errorHandler = LacErrorHandler::getInstance();
     }
     
     public static function getInstance(): self {
@@ -25,16 +30,52 @@ class LacDatabaseHelper {
     }
     
     /**
-     * Get validated and safe table name with prefix
+     * Get validated and safe table name with prefix (standardized error handling)
+     * Returns array result for new error handling, use safeTableString for legacy compatibility
      */
-    public static function safeTable(string $prefix, string $name): string {
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $prefix)) {
-            throw new InvalidArgumentException('Invalid table prefix: must be alphanumeric/underscore only');
+    public static function safeTable(string $prefix, string $name): array {
+        $errorHandler = LacErrorHandler::getInstance();
+        
+        $prefixValidation = $errorHandler->validateInput(
+            $prefix, 
+            'string', 
+            ['pattern' => '/^[a-zA-Z0-9_]+$/', 'max_length' => 64]
+        );
+        if (!$prefixValidation['success']) {
+            return $errorHandler->handleError(
+                'Invalid table prefix: must be alphanumeric/underscore only',
+                LacErrorHandler::CATEGORY_VALIDATION,
+                LacErrorHandler::SEVERITY_HIGH,
+                ['prefix' => $prefix]
+            );
         }
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $name)) {
-            throw new InvalidArgumentException('Invalid table name: must be alphanumeric/underscore only');
+        
+        $nameValidation = $errorHandler->validateInput(
+            $name, 
+            'string', 
+            ['pattern' => '/^[a-zA-Z0-9_]+$/', 'max_length' => 64]
+        );
+        if (!$nameValidation['success']) {
+            return $errorHandler->handleError(
+                'Invalid table name: must be alphanumeric/underscore only',
+                LacErrorHandler::CATEGORY_VALIDATION,
+                LacErrorHandler::SEVERITY_HIGH,
+                ['name' => $name]
+            );
         }
-        return $prefix . $name;
+        
+        return LacErrorHandler::success($prefix . $name);
+    }
+    
+    /**
+     * Legacy wrapper for backward compatibility - returns string or throws exception
+     */
+    public static function safeTableString(string $prefix, string $name): string {
+        $result = self::safeTable($prefix, $name);
+        if (!$result['success']) {
+            throw new InvalidArgumentException($result['error']);
+        }
+        return $result['data'];
     }
     
     /**
@@ -83,48 +124,62 @@ class LacDatabaseHelper {
     }
     
     /**
-     * Execute a prepared statement query with parameters and caching
+     * Execute a prepared statement query with parameters and caching (standardized error handling)
      * @param string $query SQL query with ? placeholders
      * @param string $types Parameter types string (e.g., 'si' for string+int)
      * @param array $params Array of parameter values
      * @param bool $useCache Whether to cache results for repeated queries
-     * @return array|false Result array or false on failure
+     * @return array Result with success/error information
      */
-    public function preparedQuery(string $query, string $types = '', array $params = [], bool $useCache = false) {
+    public function preparedQuery(string $query, string $types = '', array $params = [], bool $useCache = false): array {
         // Check cache first for cacheable queries
         if ($useCache && empty($params)) {
             $cacheKey = md5($query);
             if (isset(self::$queryCache[$cacheKey])) {
-                if ($this->debug) {
+                if ($this->debug && lac_is_verbose_debug_mode()) {
                     error_log('[LAC DEBUG] Query cache hit: ' . substr($query, 0, 50) . '...');
                 }
-                return self::$queryCache[$cacheKey];
+                return LacErrorHandler::success(self::$queryCache[$cacheKey], ['cached' => true]);
             }
         }
         
         $connection = $this->getConnection();
         if (!$connection) {
-            return false;
+            return $this->errorHandler->handleDatabaseError(
+                'Connection failed',
+                'Cannot establish database connection',
+                ['query' => substr($query, 0, 100)]
+            );
         }
         
         $stmt = $connection->prepare($query);
         if (!$stmt) {
-            if ($this->debug) {
-                error_log('[LAC DEBUG] Prepare failed: ' . $connection->error);
-            }
-            return false;
+            return $this->errorHandler->handleDatabaseError(
+                'Query preparation failed',
+                $connection->error,
+                ['query' => substr($query, 0, 100)]
+            );
         }
         
         if (!empty($params)) {
-            $stmt->bind_param($types, ...$params);
+            if (!$stmt->bind_param($types, ...$params)) {
+                $stmt->close();
+                return $this->errorHandler->handleDatabaseError(
+                    'Parameter binding failed',
+                    $stmt->error,
+                    ['types' => $types, 'param_count' => count($params)]
+                );
+            }
         }
         
         if (!$stmt->execute()) {
-            if ($this->debug) {
-                error_log('[LAC DEBUG] Execute failed: ' . $stmt->error);
-            }
+            $error = $stmt->error;
             $stmt->close();
-            return false;
+            return $this->errorHandler->handleDatabaseError(
+                'Query execution failed',
+                $error,
+                ['query' => substr($query, 0, 100)]
+            );
         }
         
         $result = $stmt->get_result();
@@ -142,49 +197,175 @@ class LacDatabaseHelper {
         if ($useCache && !empty($data) && empty($params)) {
             $cacheKey = md5($query);
             self::$queryCache[$cacheKey] = $data;
-            if ($this->debug) {
+            if ($this->debug && lac_is_verbose_debug_mode()) {
                 error_log('[LAC DEBUG] Query result cached: ' . substr($query, 0, 50) . '...');
             }
         }
         
-        return $data;
+        return LacErrorHandler::success($data, ['query_time' => microtime(true)]);
     }
     
     /**
-     * Get a single configuration value from database with caching
+     * Get a single configuration value from database with caching (standardized error handling)
      * @param string $param Configuration parameter name
      * @param mixed $default Default value if not found
-     * @return mixed Configuration value or default
+     * @return array Result with success/error information
      */
-    public function getConfigParam(string $param, $default = null) {
+    public function getConfigParam(string $param, $default = null): array {
+        $validation = $this->errorHandler->validateInput($param, 'string', ['required' => true]);
+        if (!$validation['success']) {
+            return $this->errorHandler->error('VALIDATION_ERROR', 'Parameter name cannot be empty');
+        }
+        
         global $conf;
         
         // Check if already loaded in $conf
         if (isset($conf[$param])) {
-            return $conf[$param];
+            return LacErrorHandler::success($conf[$param], ['source' => 'global_config']);
         }
         
         $prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
         
         try {
-            $configTable = self::safeTable($prefix, 'config');
+            $configTableResult = self::safeTable($prefix, 'config');
+            if (!$configTableResult['success']) {
+                return LacErrorHandler::success($default, ['source' => 'default_value', 'reason' => 'table_check_failed']);
+            }
+            $configTable = $configTableResult['data'];
+            
             $query = "SELECT value FROM {$configTable} WHERE param = ?";
             // Use caching for config queries since they're frequently accessed
             $results = $this->preparedQuery($query, 's', [$param], true);
             
-            if (!empty($results)) {
-                $value = $results[0]['value'];
+            if (!$results['success']) {
+                return LacErrorHandler::success($default, ['source' => 'default_value', 'reason' => 'query_failed']);
+            }
+            
+            if (!empty($results['data'])) {
+                $value = $results['data'][0]['value'];
                 // Cache in $conf for subsequent requests
                 $conf[$param] = $value;
-                return $value;
+                return LacErrorHandler::success($value, ['source' => 'database', 'cached_in_conf' => true]);
             }
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log('[LAC DEBUG] Config query failed: ' . $e->getMessage());
-            }
+            return $this->errorHandler->handleDatabaseError(
+                'Configuration query failed',
+                $e->getMessage(),
+                ['param' => $param]
+            );
         }
         
-        return $default;
+        return LacErrorHandler::success($default, ['source' => 'default_value', 'reason' => 'not_found']);
+    }
+    
+    /**
+     * Backward compatibility wrapper for getConfigParam (legacy return format)
+     * @deprecated Use getConfigParam() with standardized error handling
+     * @param string $param Configuration parameter name
+     * @param mixed $default Default value if not found
+     * @return mixed Configuration value or default
+     */
+    public function getConfigParamLegacy(string $param, $default = null) {
+        $result = $this->getConfigParam($param, $default);
+        return $result['success'] ? $result['data'] : $default;
+    }
+    
+    /**
+     * Update or insert a configuration setting (standardized error handling)
+     * @param string $setting Setting name
+     * @param string $value Setting value
+     * @return array Result with success/error information
+     */
+    public function updateSetting(string $setting, string $value): array {
+        $validation = $this->errorHandler->validateInput($setting, 'string', ['required' => true]);
+        if (!$validation['success']) {
+            return $this->errorHandler->error('VALIDATION_ERROR', 'Setting name cannot be empty');
+        }
+        
+        $connection = $this->getConnection();
+        if (!$connection) {
+            return $this->errorHandler->handleDatabaseError(
+                'Connection failed',
+                'Cannot establish database connection'
+            );
+        }
+        
+        $table = LAC_TABLE;
+        $query = "INSERT INTO `{$table}` (setting, value) VALUES (?, ?) 
+                  ON DUPLICATE KEY UPDATE value = VALUES(value)";
+        
+        $stmt = $connection->prepare($query);
+        if (!$stmt) {
+            return $this->errorHandler->handleDatabaseError(
+                'Query preparation failed',
+                $connection->error,
+                ['setting' => $setting]
+            );
+        }
+        
+        if (!$stmt->bind_param('ss', $setting, $value)) {
+            $stmt->close();
+            return $this->errorHandler->handleDatabaseError(
+                'Parameter binding failed',
+                $stmt->error,
+                ['setting' => $setting]
+            );
+        }
+        
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            return $this->errorHandler->handleDatabaseError(
+                'Setting update failed',
+                $error,
+                ['setting' => $setting]
+            );
+        }
+        
+        $affected = $stmt->affected_rows;
+        $stmt->close();
+        
+        if ($this->debug && lac_is_verbose_debug_mode()) {
+            error_log("[LAC DEBUG] Setting '{$setting}' updated successfully (affected rows: {$affected})");
+        }
+        
+        return LacErrorHandler::success(null, ['affected_rows' => $affected, 'setting' => $setting]);
+    }
+    
+    /**
+     * Get a LAC plugin setting value (standardized error handling)
+     * @param string $setting Setting name
+     * @param mixed $default Default value if not found
+     * @return array Result with success/error information
+     */
+    public function getSetting(string $setting, $default = null): array {
+        $validation = $this->errorHandler->validateInput($setting, 'string', ['required' => true]);
+        if (!$validation['success']) {
+            return $this->errorHandler->error('VALIDATION_ERROR', 'Setting name cannot be empty');
+        }
+        
+        $connection = $this->getConnection();
+        if (!$connection) {
+            return $this->errorHandler->handleDatabaseError(
+                'Connection failed',
+                'Cannot establish database connection'
+            );
+        }
+        
+        $table = LAC_TABLE;
+        $query = "SELECT value FROM `{$table}` WHERE setting = ?";
+        
+        $result = $this->preparedQuery($query, 's', [$setting], true);
+        
+        if (!$result['success']) {
+            return LacErrorHandler::success($default, ['source' => 'default_value', 'reason' => 'query_failed']);
+        }
+        
+        if (!empty($result['data'])) {
+            return LacErrorHandler::success($result['data'][0]['value'], ['source' => 'database']);
+        }
+        
+        return LacErrorHandler::success($default, ['source' => 'default_value', 'reason' => 'not_found']);
     }
     
     /**
@@ -226,6 +407,6 @@ class LacDatabaseHelper {
 // Backward compatibility functions - delegate to centralized class
 if (!function_exists('lac_safe_table')) {
     function lac_safe_table(string $prefix, string $name): string {
-        return LacDatabaseHelper::safeTable($prefix, $name);
+        return LacDatabaseHelper::safeTableString($prefix, $name);
     }
 }

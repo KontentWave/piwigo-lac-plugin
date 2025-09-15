@@ -1,10 +1,11 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
-// Load centralized constants and database helper
+// Load centralized constants, helpers, and error handler
 include_once LAC_PATH . 'include/constants.inc.php';
 include_once LAC_PATH . 'include/database_helper.inc.php';
 include_once LAC_PATH . 'include/session_manager.inc.php';
+include_once LAC_PATH . 'include/error_handler.inc.php';
 
 // Legacy constant definitions kept for backward compatibility (now reference centralized definitions)
 // Maximum allowed length for fallback URL (defensive against extremely large inputs)
@@ -31,36 +32,160 @@ if (!defined('LAC_COOKIE_MAX_WINDOW')) { define('LAC_COOKIE_MAX_WINDOW', 86400);
 /**
  * Set (or refresh) the LAC timestamp cookie with standardized security attributes.
  * Abstracted so root page and any future admin/tooling paths use identical policy.
+ * Enhanced with edge case validation.
  */
 if (!function_exists('lac_set_consent_cookie')) {
-function lac_set_consent_cookie(int $timestamp, ?bool $secureOverride = null): void
+function lac_set_consent_cookie(int $timestamp, ?bool $secureOverride = null): array
 {
-	$cookieName = lac_get_cookie_name();
-	$window = lac_get_cookie_max_window();
-	$secure = $secureOverride;
-	if ($secure === null) {
-		$secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+	$errorHandler = LacErrorHandler::getInstance();
+	
+	try {
+		// Validate timestamp
+		$validation = $errorHandler->validateInput($timestamp, 'integer', ['min' => 0]);
+		if (!$validation['success']) {
+			return LacErrorHandler::error('Invalid timestamp: ' . $validation['error'], 'VALIDATION_ERROR');
+		}
+		
+		// Validate timestamp is not too far in the past or future
+		$currentTime = time();
+		$maxAge = 86400 * 365; // 1 year
+		if ($timestamp < ($currentTime - $maxAge) || $timestamp > ($currentTime + $maxAge)) {
+			return LacErrorHandler::error('Timestamp out of reasonable range', 'VALIDATION_ERROR');
+		}
+		
+		$cookieName = lac_get_cookie_name();
+		$window = lac_get_cookie_max_window();
+		$secure = $secureOverride;
+		if ($secure === null) {
+			$secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+		}
+		
+		$cookieOptions = [
+			'expires'  => $timestamp + $window,
+			'path'     => '/',
+			'domain'   => '',
+			'secure'   => $secure,
+			'httponly' => true,
+			'samesite' => 'Lax',
+		];
+		
+		$success = setcookie($cookieName, (string)$timestamp, $cookieOptions);
+		if (!$success) {
+			return LacErrorHandler::error('Failed to set cookie', 'COOKIE_ERROR');
+		}
+		
+		return LacErrorHandler::success(null, ['cookie_set' => true, 'timestamp' => $timestamp]);
+		
+	} catch (Exception $e) {
+		return $errorHandler->handleError(
+			'COOKIE_SET_ERROR',
+			'Failed to set consent cookie: ' . $e->getMessage(),
+			500
+		);
 	}
-	setcookie($cookieName, (string)$timestamp, [
-		'expires'  => $timestamp + $window,
-		'path'     => '/',
-		'domain'   => '',
-		'secure'   => $secure,
-		'httponly' => true,
-		'samesite' => 'Lax',
-	]);
 }
 }
 
 /**
- * Determine if current user is a guest.
+ * Legacy wrapper for lac_set_consent_cookie (maintains void signature)
+ * @deprecated Use lac_set_consent_cookie() with standardized error handling
+ */
+if (!function_exists('lac_set_consent_cookie_legacy')) {
+function lac_set_consent_cookie_legacy(int $timestamp, ?bool $secureOverride = null): void
+{
+	$result = lac_set_consent_cookie($timestamp, $secureOverride);
+	if (!$result['success']) {
+		error_log('[LAC ERROR] Failed to set consent cookie: ' . $result['message']);
+	}
+}
+}
+
+/**
+ * Determine if current user is a guest with enhanced validation.
+ * @return array Result with success/error information
+ */
+function lac_is_guest_with_validation(): array
+{
+	try {
+		global $user;
+		
+		// Check if $user is properly initialized
+		if (!isset($user)) {
+			return LacErrorHandler::success(true, ['reason' => 'user_not_set']);
+		}
+		
+		if (!is_array($user)) {
+			return LacErrorHandler::success(true, ['reason' => 'user_not_array']);
+		}
+		
+		if (!array_key_exists('is_guest', $user)) {
+			return LacErrorHandler::success(true, ['reason' => 'is_guest_key_missing']);
+		}
+		
+		$isGuest = !empty($user['is_guest']);
+		return LacErrorHandler::success($isGuest, ['user_id' => $user['id'] ?? 'unknown']);
+		
+	} catch (Exception $e) {
+		$errorHandler = LacErrorHandler::getInstance();
+		return $errorHandler->handleError(
+			'USER_CHECK_ERROR',
+			'Failed to check user guest status: ' . $e->getMessage(),
+			500
+		);
+	}
+}
+
+/**
+ * Determine if current user is a guest (legacy function with enhanced validation).
  */
 function lac_is_guest(): bool
 {
-	global $user;
-	if (!isset($user) || !is_array($user)) { return true; }
-	if (!array_key_exists('is_guest', $user)) { return true; }
-	return !empty($user['is_guest']);
+	$result = lac_is_guest_with_validation();
+	return $result['success'] ? $result['data'] : true; // Default to guest if error
+}
+
+/**
+ * Whether the current session signals age consent (with enhanced validation)
+ * @return array Result with success/error information
+ */
+function lac_has_consent_with_validation(): array
+{
+	try {
+		$sessionManager = LacSessionManager::getInstance();
+		
+		// Check for valid consent using standardized error handling
+		$consentResult = $sessionManager->hasConsent();
+		if (!$consentResult['success']) {
+			return $consentResult;
+		}
+		
+		if (!$consentResult['data']) {
+			return LacErrorHandler::success(false, ['reason' => 'no_consent']);
+		}
+		
+		// Check if consent has expired
+		$expiryResult = $sessionManager->isConsentExpired();
+		if (!$expiryResult['success']) {
+			return $expiryResult;
+		}
+		
+		if ($expiryResult['data']) {
+			// Clear expired consent
+			$clearResult = $sessionManager->clearConsent();
+			// Note: clearResult failure is not critical for the main flow
+			return LacErrorHandler::success(false, ['reason' => 'consent_expired']);
+		}
+		
+		return LacErrorHandler::success(true, ['reason' => 'valid_consent']);
+		
+	} catch (Exception $e) {
+		$errorHandler = LacErrorHandler::getInstance();
+		return $errorHandler->handleError(
+			'CONSENT_CHECK_ERROR',
+			'Failed to check consent status: ' . $e->getMessage(),
+			500
+		);
+	}
 }
 
 /**
@@ -68,20 +193,43 @@ function lac_is_guest(): bool
  */
 function lac_has_consent(): bool
 {
-	$sessionManager = LacSessionManager::getInstance();
-	
-	// Quick check for valid consent
-	if (!$sessionManager->hasConsent()) {
-		return false;
+	$result = lac_has_consent_with_validation();
+	return $result['success'] ? $result['data'] : false; // Default to no consent on error
+}
+
+/**
+ * Evaluate whether consent has expired based on configured duration (with enhanced validation)
+ * @param int $durationMinutes Duration in minutes
+ * @return array Result with success/error information
+ */
+function lac_consent_expired_with_validation(int $durationMinutes): array
+{
+	try {
+		$errorHandler = LacErrorHandler::getInstance();
+		
+		// Validate duration parameter
+		$validation = $errorHandler->validateInput($durationMinutes, 'integer', ['min' => 0, 'max' => LAC_MAX_CONSENT_DURATION]);
+		if (!$validation['success']) {
+			return LacErrorHandler::error('Invalid duration: ' . $validation['error'], 'VALIDATION_ERROR');
+		}
+		
+		$sessionManager = LacSessionManager::getInstance();
+		$expiryResult = $sessionManager->isConsentExpired();
+		
+		if (!$expiryResult['success']) {
+			return $expiryResult;
+		}
+		
+		return LacErrorHandler::success($expiryResult['data'], ['duration_minutes' => $durationMinutes]);
+		
+	} catch (Exception $e) {
+		$errorHandler = LacErrorHandler::getInstance();
+		return $errorHandler->handleError(
+			'EXPIRY_CHECK_ERROR',
+			'Failed to check consent expiry: ' . $e->getMessage(),
+			500
+		);
 	}
-	
-	// Check if consent has expired
-	if ($sessionManager->isConsentExpired()) {
-		$sessionManager->clearConsent();
-		return false;
-	}
-	
-	return true;
 }
 
 /**
@@ -90,8 +238,66 @@ function lac_has_consent(): bool
  */
 function lac_consent_expired(int $durationMinutes): bool
 {
-	$sessionManager = LacSessionManager::getInstance();
-	return $sessionManager->isConsentExpired();
+	$result = lac_consent_expired_with_validation($durationMinutes);
+	return $result['success'] ? $result['data'] : true; // Default to expired on error
+}
+
+/**
+ * Retrieve consent duration (minutes) with enhanced validation and error handling.
+ * Falls back to DB direct lookup if missing/zero but a cached value
+ * may not yet be loaded into $conf (robustness for early init ordering issues reported in production).
+ * @return array Result with success/error information
+ */
+function lac_get_consent_duration_with_validation(): array
+{
+	try {
+		global $conf;
+		$debug = lac_is_debug_mode();
+		
+		if (isset($conf[LAC_CONFIG_CONSENT_DURATION])) {
+			$val = (int)$conf[LAC_CONFIG_CONSENT_DURATION];
+			if ($val > 0) {
+				if ($debug) { error_log('[LAC DEBUG] duration from $conf = '.$val.'m'); }
+				return LacErrorHandler::success($val, ['source' => 'global_config']);
+			}
+			// value is 0 -> attempt DB fallback below
+		}
+		
+		static $fetched = false; 
+		static $cached = 0;
+		if ($fetched) { 
+			return LacErrorHandler::success($cached, ['source' => 'static_cache']); 
+		}
+		$fetched = true;
+		
+		// Use centralized database helper for fallback lookup
+		$dbHelper = LacDatabaseHelper::getInstance();
+		$configResult = $dbHelper->getConfigParam(LAC_CONFIG_CONSENT_DURATION, 0);
+		
+		if (!$configResult['success']) {
+			if ($debug) {
+				error_log('[LAC DEBUG] duration fallback failed: ' . $configResult['message']);
+			}
+			$cached = 0;
+			return LacErrorHandler::success(0, ['source' => 'default_fallback', 'reason' => 'db_error']);
+		}
+		
+		$cached = (int)$configResult['data'];
+		
+		if ($debug) { 
+			error_log('[LAC DEBUG] duration from DB fallback = '.$cached.'m'); 
+		}
+		
+		return LacErrorHandler::success($cached, ['source' => 'database_fallback']);
+		
+	} catch (Exception $e) {
+		$errorHandler = LacErrorHandler::getInstance();
+		return $errorHandler->handleError(
+			'DURATION_LOOKUP_ERROR',
+			'Failed to retrieve consent duration: ' . $e->getMessage(),
+			500
+		);
+	}
 }
 
 /**
@@ -100,39 +306,56 @@ function lac_consent_expired(int $durationMinutes): bool
  */
 function lac_get_consent_duration(): int
 {
-	global $conf;
-	$debug = lac_is_debug_mode();
-	
-	if (isset($conf[LAC_CONFIG_CONSENT_DURATION])) {
-		$val = (int)$conf[LAC_CONFIG_CONSENT_DURATION];
-		if ($val > 0) {
-			if ($debug) { error_log('[LAC DEBUG] duration from $conf = '.$val.'m'); }
-			return $val;
-		}
-		// value is 0 -> attempt DB fallback below
-	}
-	
-	static $fetched = false; 
-	static $cached = 0;
-	if ($fetched) { return $cached; }
-	$fetched = true;
-	
-	// Use centralized database helper for fallback lookup
+	$result = lac_get_consent_duration_with_validation();
+	return $result['success'] ? $result['data'] : 0; // Default to session-only consent on error
+}
+
+/**
+ * Core decision function used by tests with enhanced validation; returns one of: 'allow' or 'redirect'.
+ * @return array Result with success/error information
+ */
+function lac_gate_decision_with_validation(): array
+{
 	try {
-		$dbHelper = LacDatabaseHelper::getInstance();
-		$value = $dbHelper->getConfigParam(LAC_CONFIG_CONSENT_DURATION, 0);
-		$cached = (int)$value;
+		if (function_exists('pwg_get_conf')) {
+			// prefer direct $conf to avoid dependency during early init
+		}
+		global $conf;
 		
-		if ($debug) { 
-			error_log('[LAC DEBUG] duration from DB fallback = '.$cached.'m'); 
+		// Check if gate is enabled
+		if (isset($conf['lac_enabled']) && !$conf['lac_enabled']) { 
+			return LacErrorHandler::success('allow', ['reason' => 'gate_disabled']);
 		}
 		
-		return $cached;
+		// Check if user is guest
+		$guestResult = lac_is_guest_with_validation();
+		if (!$guestResult['success']) {
+			return $guestResult;
+		}
+		
+		if (!$guestResult['data']) { 
+			return LacErrorHandler::success('allow', ['reason' => 'user_logged_in']);
+		}
+		
+		// Check consent status
+		$consentResult = lac_has_consent_with_validation();
+		if (!$consentResult['success']) {
+			return $consentResult;
+		}
+		
+		if ($consentResult['data']) {
+			return LacErrorHandler::success('allow', ['reason' => 'valid_consent']);
+		}
+		
+		return LacErrorHandler::success('redirect', ['reason' => 'no_valid_consent']);
+		
 	} catch (Exception $e) {
-		if ($debug) {
-			error_log('[LAC DEBUG] duration fallback failed: ' . $e->getMessage());
-		}
-		return 0; // Default to session-only consent
+		$errorHandler = LacErrorHandler::getInstance();
+		return $errorHandler->handleError(
+			'GATE_DECISION_ERROR',
+			'Failed to make gate decision: ' . $e->getMessage(),
+			500
+		);
 	}
 }
 
@@ -141,23 +364,101 @@ function lac_get_consent_duration(): int
  */
 function lac_gate_decision(): string
 {
-	if (function_exists('pwg_get_conf')) {
-			// prefer direct $conf to avoid dependency during early init
+	$result = lac_gate_decision_with_validation();
+	return $result['success'] ? $result['data'] : 'redirect'; // Default to redirect on error for security
+}
+
+/**
+ * Sanitize fallback URL input with enhanced validation and standardized error handling.
+ * Enhanced validation against multiple attack vectors.
+ * @param string $url URL to sanitize
+ * @param bool $disallow_internal Whether to disallow internal URLs
+ * @return array Result with success/error information
+ */
+function lac_sanitize_fallback_url_with_validation(string $url, bool $disallow_internal = false): array
+{
+	try {
+		$errorHandler = LacErrorHandler::getInstance();
+		
+		// Validate input
+		$validation = $errorHandler->validateInput($url, 'string', ['max_length' => LAC_MAX_FALLBACK_URL_LEN]);
+		if (!$validation['success']) {
+			return LacErrorHandler::error('URL validation failed: ' . $validation['error'], 'VALIDATION_ERROR');
 		}
-		global $conf;
-		if (isset($conf['lac_enabled']) && !$conf['lac_enabled']) { return 'allow'; }
-		if (!lac_is_guest()) { return 'allow'; }
-		// Determine duration if present
-		$duration = lac_get_consent_duration();
-		if (lac_has_consent()) {
-			if (lac_consent_expired($duration)) {
-				unset($_SESSION['lac_consent']);
-				unset($_SESSION['lac_consent_granted']);
-				return 'redirect';
+		
+		$url = trim($url);
+		if ($url === '') {
+			return LacErrorHandler::success('', ['reason' => 'empty_url']);
+		}
+		
+		// Check for dangerous schemes first
+		$dangerous_schemes = ['javascript:', 'data:', 'vbscript:', 'file:', 'ftp:', 'mailto:', 'news:', 'gopher:'];
+		foreach ($dangerous_schemes as $scheme) {
+			if (stripos($url, $scheme) === 0) {
+				return LacErrorHandler::error('Dangerous URL scheme detected', 'SECURITY_ERROR', ['scheme' => $scheme]);
 			}
-			return 'allow';
 		}
-		return 'redirect';
+		
+		// Check for encoded dangerous schemes (basic URL encoding bypass prevention)
+		$encoded_js = ['%6a%61%76%61%73%63%72%69%70%74%3a', '%64%61%74%61%3a']; // javascript:, data:
+		foreach ($encoded_js as $encoded) {
+			if (stripos($url, $encoded) !== false) {
+				return LacErrorHandler::error('Encoded dangerous scheme detected', 'SECURITY_ERROR');
+			}
+		}
+		
+		$san = filter_var($url, FILTER_SANITIZE_URL);
+		if (!$san || !preg_match('#^https?://#i', $san)) { 
+			return LacErrorHandler::error('Invalid URL format (must be http/https)', 'VALIDATION_ERROR');
+		}
+		
+		// Parse URL for additional security checks
+		$parsed = parse_url($san);
+		if (!$parsed || !isset($parsed['host'])) {
+			return LacErrorHandler::error('Invalid URL structure', 'VALIDATION_ERROR');
+		}
+		
+		// Check for path traversal attempts in path
+		if (isset($parsed['path']) && (strpos($parsed['path'], '..') !== false || strpos($parsed['path'], '//') !== false)) {
+			return LacErrorHandler::error('Path traversal attempt detected', 'SECURITY_ERROR');
+		}
+		
+		// Check for suspicious query parameters that could be used for attacks
+		if (isset($parsed['query'])) {
+			$suspicious_params = ['<script', 'javascript:', 'vbscript:', 'onload=', 'onerror=', 'eval('];
+			foreach ($suspicious_params as $param) {
+				if (stripos($parsed['query'], $param) !== false) {
+					return LacErrorHandler::error('Suspicious query parameter detected', 'SECURITY_ERROR', ['param' => $param]);
+				}
+			}
+		}
+		
+		// Check for internal URLs if requested
+		if ($disallow_internal) {
+			$currentHost = $_SERVER['HTTP_HOST'] ?? '';
+			if (!empty($currentHost) && strcasecmp($parsed['host'], $currentHost) === 0) {
+				return LacErrorHandler::error('Internal URLs not allowed', 'VALIDATION_ERROR');
+			}
+			
+			// Also block localhost, 127.0.0.1, and private IP ranges
+			if (in_array(strtolower($parsed['host']), ['localhost', '127.0.0.1', '0.0.0.0']) ||
+			    preg_match('/^192\.168\./', $parsed['host']) ||
+			    preg_match('/^10\./', $parsed['host']) ||
+			    preg_match('/^172\.(1[6-9]|2[0-9]|3[0-1])\./', $parsed['host'])) {
+				return LacErrorHandler::error('Private/local addresses not allowed', 'VALIDATION_ERROR');
+			}
+		}
+		
+		return LacErrorHandler::success($san, ['validated' => true, 'host' => $parsed['host']]);
+		
+	} catch (Exception $e) {
+		$errorHandler = LacErrorHandler::getInstance();
+		return $errorHandler->handleError(
+			'URL_SANITIZATION_ERROR',
+			'Failed to sanitize URL: ' . $e->getMessage(),
+			500
+		);
+	}
 }
 
 /**
@@ -166,67 +467,8 @@ function lac_gate_decision(): string
  */
 function lac_sanitize_fallback_url(string $url, bool $disallow_internal = false): string
 {
-	$url = trim($url);
-	if ($url === '') return '';
-	if (strlen($url) > LAC_MAX_FALLBACK_URL_LEN) { return ''; }
-	
-	// Check for dangerous schemes first
-	$dangerous_schemes = ['javascript:', 'data:', 'vbscript:', 'file:', 'ftp:', 'mailto:', 'news:', 'gopher:'];
-	foreach ($dangerous_schemes as $scheme) {
-		if (stripos($url, $scheme) === 0) {
-			return ''; // Reject dangerous schemes
-		}
-	}
-	
-	// Check for encoded dangerous schemes (basic URL encoding bypass prevention)
-	$encoded_js = ['%6a%61%76%61%73%63%72%69%70%74%3a', '%64%61%74%61%3a']; // javascript:, data:
-	foreach ($encoded_js as $encoded) {
-		if (stripos($url, $encoded) !== false) {
-			return '';
-		}
-	}
-	
-	$san = filter_var($url, FILTER_SANITIZE_URL);
-	if (!$san || !preg_match('#^https?://#i', $san)) { return ''; }
-	
-	// Parse URL for additional security checks
-	$parsed = parse_url($san);
-	if (!$parsed || !isset($parsed['host'])) {
-		return ''; // Invalid URL structure
-	}
-	
-	// Check for path traversal attempts in path
-	if (isset($parsed['path']) && (strpos($parsed['path'], '..') !== false || strpos($parsed['path'], '//') !== false)) {
-		return ''; // Path traversal attempt
-	}
-	
-	// Check for suspicious query parameters that could be used for attacks
-	if (isset($parsed['query'])) {
-		$suspicious_params = ['<script', 'javascript:', 'vbscript:', 'onload=', 'onerror=', 'eval('];
-		foreach ($suspicious_params as $param) {
-			if (stripos($parsed['query'], $param) !== false) {
-				return ''; // Suspicious query parameter
-			}
-		}
-	}
-	
-	// Check for internal URLs if requested
-	if ($disallow_internal) {
-		$currentHost = $_SERVER['HTTP_HOST'] ?? '';
-		if (!empty($currentHost) && strcasecmp($parsed['host'], $currentHost) === 0) {
-			return ''; // internal URL not allowed
-		}
-		
-		// Also block localhost, 127.0.0.1, and private IP ranges
-		if (in_array(strtolower($parsed['host']), ['localhost', '127.0.0.1', '0.0.0.0']) ||
-		    preg_match('/^192\.168\./', $parsed['host']) ||
-		    preg_match('/^10\./', $parsed['host']) ||
-		    preg_match('/^172\.(1[6-9]|2[0-9]|3[0-1])\./', $parsed['host'])) {
-			return ''; // Private/local addresses not allowed
-		}
-	}
-	
-	return $san;
+	$result = lac_sanitize_fallback_url_with_validation($url, $disallow_internal);
+	return $result['success'] ? $result['data'] : ''; // Return empty string on error for legacy compatibility
 }
 
 // (Legacy file-based fallback removed; lac_fallback_url now stored only in DB.)
