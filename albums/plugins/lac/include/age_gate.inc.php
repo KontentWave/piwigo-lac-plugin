@@ -27,7 +27,11 @@ function lac_age_gate_guard()
   // Ensure helper functions are loaded (expiration logic lives there)
   if (!function_exists('lac_consent_expired')) {
     $funcFile = LAC_PATH . 'include/functions.inc.php';
-    if (file_exists($funcFile)) { @include_once $funcFile; }
+    if (file_exists($funcFile)) { 
+      include_once $funcFile; 
+    } else if ($debug_mode) {
+      error_log('[LAC DEBUG] Functions file not found: ' . $funcFile);
+    }
   }
 
   if (!function_exists('lac_is_guest')) {

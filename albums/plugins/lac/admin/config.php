@@ -53,7 +53,7 @@ if (isset($_POST['lac_settings_submit'])) {
     } elseif ($san === '') {
       // Determine if reason is internal host vs generic invalid
       $host = $_SERVER['HTTP_HOST'] ?? '';
-      $p = @parse_url($raw);
+      $p = parse_url($raw);
       if (!empty($host) && isset($p['host']) && strcasecmp($p['host'], $host) === 0) {
         $page['errors'][] = l10n('Internal URLs are not allowed as fallback');
       } else {

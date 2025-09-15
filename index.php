@@ -49,15 +49,19 @@
         $cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
         $cookieWindow = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400;
         
-        // Set secure LAC timestamp cookie with proper security attributes
-        setcookie($cookieName, (string)time(), [
-            'expires' => time() + $cookieWindow,
-            'path' => '/',
-            'domain' => '',
-            'secure' => $secure,
-            'httponly' => true,
-            'samesite' => 'Lax'
-        ]);
+        // Set secure LAC timestamp cookie with standardized helper (if available)
+        if (function_exists('lac_set_consent_cookie')) {
+            lac_set_consent_cookie(time(), $secure);
+        } else {
+            setcookie($cookieName, (string)time(), [
+                'expires' => time() + $cookieWindow,
+                'path' => '/',
+                'domain' => '',
+                'secure' => $secure,
+                'httponly' => true,
+                'samesite' => 'Lax'
+            ]);
+        }
         
         // Regenerate session ID on consent for additional security
         session_regenerate_id(true);
@@ -114,28 +118,34 @@ $consentDuration = 0; // minutes; 0 = session-only
 try {
     $conf = [];
     $prefixeTable = 'piwigo_';
-    @include __DIR__ . '/albums/local/config/database.inc.php';
+    if (file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
+        include __DIR__ . '/albums/local/config/database.inc.php';
+    }
     if (!empty($conf['db_host'])) {
-        $mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+        $mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
         if ($mysqli) {
             $configTable = lac_safe_table($prefixeTable, 'config');
-            // Use prepared statement even though param list is static (defensive consistency)
-            $stmt = @mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+            $stmt = mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
             if ($stmt) {
                 $param = 'lac_consent_duration';
-                @mysqli_stmt_bind_param($stmt, 's', $param);
-                if (@mysqli_stmt_execute($stmt)) {
-                    $res = @mysqli_stmt_get_result($stmt);
+                if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
+                    $res = mysqli_stmt_get_result($stmt);
                     if ($res && ($row = mysqli_fetch_assoc($res))) {
                         $consentDuration = (int)$row['value'];
                     }
                 }
-                @mysqli_stmt_close($stmt);
+                mysqli_stmt_close($stmt);
+            } else if ($debug) {
+                error_log('[LAC DEBUG] Failed to prepare duration query: ' . mysqli_error($mysqli));
             }
-            @mysqli_close($mysqli);
+            mysqli_close($mysqli);
+        } else if ($debug) {
+            error_log('[LAC DEBUG] Database connection failed for consent duration lookup');
         }
     }
-} catch (Throwable $e) { /* swallow; defaults remain */ }
+} catch (Throwable $e) { 
+    if ($debug) { error_log('[LAC DEBUG] Error loading consent duration: ' . $e->getMessage()); }
+}
 
 // Helper to mark structured consent
 function lac_mark_consent_structured(?int $ts = null) {
@@ -167,14 +177,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
     if ($_POST['consent'] === '18+') {
         // set new LAC timestamp cookie
         $cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
-        setcookie($cookieName, (string)time(), [
-            'expires'  => time() + $cookie_lifetime,
-            'path'     => '/',
-            'domain'   => '',
-            'secure'   => $secure,
-            'httponly' => true,
-            'samesite' => 'Lax',
-        ]);
+        if (function_exists('lac_set_consent_cookie')) {
+            lac_set_consent_cookie(time(), $secure);
+        } else {
+            setcookie($cookieName, (string)time(), [
+                'expires'  => time() + $cookie_lifetime,
+                'path'     => '/',
+                'domain'   => '',
+                'secure'   => $secure,
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ]);
+        }
         // store structured session consent
         lac_mark_consent_structured();
 
@@ -192,26 +206,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
             // Minimal bootstrap: load database credentials and perform a direct query.
             $conf = [];
             $prefixeTable = 'piwigo_'; // default fallback; will be overridden by include
-            @include __DIR__ . '/albums/local/config/database.inc.php';
+            if (file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
+                include __DIR__ . '/albums/local/config/database.inc.php';
+            }
             if (!empty($conf['db_host'])) {
-                $mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+                $mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
                 if ($mysqli) {
                     $configTable = lac_safe_table($prefixeTable, 'config');
-                    $stmt = @mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+                    $stmt = mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
                     if ($stmt) {
                         $param = 'lac_fallback_url';
-                        @mysqli_stmt_bind_param($stmt, 's', $param);
-                        if (@mysqli_stmt_execute($stmt)) {
-                            $res = @mysqli_stmt_get_result($stmt);
+                        if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
+                            $res = mysqli_stmt_get_result($stmt);
                             if ($res && ($row = mysqli_fetch_assoc($res))) {
                                 $val = $row['value'];
                                 if ($val === 'false') { $val = ''; }
                                 if ($val !== 'true' && $val !== 'false') { $configuredFallback = trim($val); }
                             }
                         }
-                        @mysqli_stmt_close($stmt);
+                        mysqli_stmt_close($stmt);
+                    } else if ($debug) {
+                        error_log('[LAC DEBUG] Failed to prepare fallback URL query: ' . mysqli_error($mysqli));
                     }
-                    @mysqli_close($mysqli);
+                    mysqli_close($mysqli);
+                } else if ($debug) {
+                    error_log('[LAC DEBUG] Database connection failed for fallback URL lookup');
                 }
             }
         } catch (Throwable $e) {

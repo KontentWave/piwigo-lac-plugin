@@ -17,6 +17,30 @@ if (!defined('LAC_COOKIE_NAME')) { define('LAC_COOKIE_NAME', 'LAC'); }
 if (!defined('LAC_COOKIE_MAX_WINDOW')) { define('LAC_COOKIE_MAX_WINDOW', 86400); }
 
 /**
+ * Set (or refresh) the LAC timestamp cookie with standardized security attributes.
+ * Abstracted so root page and any future admin/tooling paths use identical policy.
+ */
+if (!function_exists('lac_set_consent_cookie')) {
+function lac_set_consent_cookie(int $timestamp, ?bool $secureOverride = null): void
+{
+	$cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
+	$window = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400;
+	$secure = $secureOverride;
+	if ($secure === null) {
+		$secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+	}
+	setcookie($cookieName, (string)$timestamp, [
+		'expires'  => $timestamp + $window,
+		'path'     => '/',
+		'domain'   => '',
+		'secure'   => $secure,
+		'httponly' => true,
+		'samesite' => 'Lax',
+	]);
+}
+}
+
+/**
  * Determine if current user is a guest.
  */
 function lac_is_guest(): bool
@@ -88,7 +112,9 @@ function lac_get_consent_duration(): int
 		}
 		$localConf = [];
 		$prefixeTable = 'piwigo_';
-		@include PHPWG_ROOT_PATH . 'local/config/database.inc.php';
+		if (file_exists(PHPWG_ROOT_PATH . 'local/config/database.inc.php')) {
+			include PHPWG_ROOT_PATH . 'local/config/database.inc.php';
+		}
 		if (!empty($localConf['db_host'])) { // unlikely path because variable names differ; keep compatibility guard
 			$dbHost = $localConf['db_host'];
 		}
@@ -101,26 +127,31 @@ function lac_get_consent_duration(): int
 					return $prefix . $name;
 				}
 			}
-			$mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+			$mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
 			if ($mysqli) {
 				$prefix = $conf['prefix_table'] ?? ($conf['prefixeTable'] ?? 'piwigo_');
 				$configTable = lac_safe_table($prefix, 'config');
-				$stmt = @mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+				$stmt = mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
 				if ($stmt) {
 					$param = 'lac_consent_duration';
-					@mysqli_stmt_bind_param($stmt, 's', $param);
-					if (@mysqli_stmt_execute($stmt)) {
-						$res = @mysqli_stmt_get_result($stmt);
+					if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
+						$res = mysqli_stmt_get_result($stmt);
 						if ($res && ($row = mysqli_fetch_assoc($res))) {
 							$cached = (int)$row['value'];
 						}
 					}
-					@mysqli_stmt_close($stmt);
+					mysqli_stmt_close($stmt);
+				} else if ($debug) {
+					error_log('[LAC DEBUG] Failed to prepare duration query in fallback: ' . mysqli_error($mysqli));
 				}
-				@mysqli_close($mysqli);
+				mysqli_close($mysqli);
+			} else if ($debug) {
+				error_log('[LAC DEBUG] Database connection failed in duration fallback');
 			}
 		}
-	} catch (Throwable $e) { /* swallow */ }
+	} catch (Throwable $e) { 
+		if ($debug) { error_log('[LAC DEBUG] Error in duration fallback: ' . $e->getMessage()); }
+	}
 	if ($debug) { error_log('[LAC DEBUG] duration from DB fallback = '.$cached.'m'); }
 	return $cached;
 }
@@ -162,7 +193,7 @@ function lac_sanitize_fallback_url(string $url, bool $disallow_internal = false)
 	if ($disallow_internal) {
 		// Determine current host if available and compare host parts case-insensitively
 		$currentHost = $_SERVER['HTTP_HOST'] ?? '';
-		$parsed = @parse_url($san);
+		$parsed = parse_url($san);
 		if (!empty($currentHost) && isset($parsed['host']) && strcasecmp($parsed['host'], $currentHost) === 0) {
 			return ''; // internal URL not allowed
 		}
