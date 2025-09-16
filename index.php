@@ -163,7 +163,8 @@ function lac_mark_consent_structured(?int $ts = null) {
 // 3) If user already has valid cookie+session id, validate duration (Option A strategy)
 $cookie_lifetime = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400; // absolute hard cap for cookie storage
 $cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
-if (isset($_COOKIE[$cookieName], $_COOKIE['PHPSESSID']) && ctype_digit($_COOKIE[$cookieName])) {
+// Allow restoration based on LAC cookie alone; session cookie may differ between root and gallery
+if (isset($_COOKIE[$cookieName]) && ctype_digit($_COOKIE[$cookieName])) {
     $cookieTs = (int)$_COOKIE[$cookieName];
     $cookieAge = time() - $cookieTs;
     $withinCookieWindow = $cookieAge < $cookie_lifetime;

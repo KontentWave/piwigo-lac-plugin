@@ -60,11 +60,16 @@ function lac_age_gate_guard_with_error_handling(): array
     }
 
     if (!function_exists('lac_is_guest')) {
-      // fallback if helpers not loaded yet
+      // Fallback guest detection using Piwigo conventions
       function lac_is_guest() {
-        global $user; 
+        global $user, $conf;
         if (!isset($user) || !is_array($user)) { return true; }
-        if (!array_key_exists('is_guest', $user)) { return true; }
+        if (isset($user['status'])) {
+          return strtolower((string)$user['status']) === 'guest';
+        }
+        if (isset($user['id']) && isset($conf['guest_id'])) {
+          return ((string)$user['id'] === (string)$conf['guest_id']);
+        }
         return !empty($user['is_guest']);
       }
     }
@@ -76,33 +81,43 @@ function lac_age_gate_guard_with_error_handling(): array
       error_log('[LAC DEBUG] guest_detected='.(lac_is_guest()?1:0)); 
     }
 
-    // If user not guest, allow
-    if (!lac_is_guest()) {
-      return LacErrorHandler::success(null, ['action' => 'allowed', 'reason' => 'user_logged_in']);
+    // Determine user role and gating applicability
+    global $user;
+    $isGuest = lac_is_guest();
+  $status = isset($user['status']) ? strtolower((string)$user['status']) : ($isGuest ? 'guest' : 'normal');
+  $isAdmin = (!empty($user['is_admin']) || in_array($status, ['admin','webmaster'], true));
+    $applyLoggedIn = isset($conf[LAC_CONFIG_APPLY_LOGGED_IN]) ? (bool)$conf[LAC_CONFIG_APPLY_LOGGED_IN] : false;
+
+    // Admin / webmaster always bypass
+    if ($isAdmin) {
+      return LacErrorHandler::success(null, ['action' => 'allowed', 'reason' => 'admin_bypass']);
     }
+
+    // Logged-in non-admin users bypass if setting disabled
+    if (!$isGuest && !$applyLoggedIn) {
+      return LacErrorHandler::success(null, ['action' => 'allowed', 'reason' => 'logged_in_bypass']);
+    }
+
+    // From here: either guest OR logged-in & setting enabled
 
     // Optimized consent checking using session manager
     $consentResult = $sessionManager->hasConsent();
-    if (!$consentResult['success']) {
-      return $errorHandler->handleError(
-        'CONSENT_CHECK_ERROR',
-        'Failed to check consent status',
-        500,
-        ['step' => 'consent_check']
-      );
-    }
-    
     $expiryResult = $sessionManager->isConsentExpired();
-    if (!$expiryResult['success']) {
-      return $errorHandler->handleError(
-        'EXPIRY_CHECK_ERROR',
-        'Failed to check consent expiry',
-        500,
-        ['step' => 'expiry_check']
-      );
+    $hasConsent = false;
+    if ($consentResult['success'] && $consentResult['data']) {
+      // Determine if legacy or structured; only structured expires
+      $duration = function_exists('lac_get_consent_duration') ? lac_get_consent_duration() : (int)($conf[LAC_CONFIG_CONSENT_DURATION] ?? 0);
+      if ($duration === 0) {
+        $hasConsent = true; // session-only legacy or structured
+      } else {
+        // duration >0 structured consent only counts if not expired
+        if ($expiryResult['success'] && !$expiryResult['data']) {
+          $hasConsent = true;
+        } elseif ($expiryResult['success'] && $expiryResult['data']) {
+          $sessionManager->clearConsent();
+        }
+      }
     }
-    
-    $hasConsent = $consentResult['data'] && !$expiryResult['data'];
     
     // Cookie reconstruction fallback (optimized):
     if (!$hasConsent && isset($_COOKIE[lac_get_cookie_name()]) && ctype_digit($_COOKIE[lac_get_cookie_name()])) {

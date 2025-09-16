@@ -33,6 +33,13 @@
       <div class="helper-text" style="font-size:0.9em;color:#666;max-width:520px;">
         {'Duration (minutes) for which consent remains valid. Set 0 for session-only.'|@translate}
       </div>
+      <br /><br />
+      <label>
+        <input type="checkbox" name="lac_apply_to_logged_in" {$LAC_APPLY_LOGGED_IN} /> {'Apply to Logged-in Users'|@translate}
+      </label>
+      <div class="helper-text" style="font-size:0.9em;color:#666;max-width:520px;">
+        {'If checked, non-admin (regular) users must also confirm age. Administrators and webmasters are always excluded.'|@translate}
+      </div>
     </fieldset>
     <p>
       <button class="submit" name="lac_settings_submit" value="1">{'Save Settings'|@translate}</button>

@@ -20,32 +20,53 @@ jQuery(".showInfo").tipTip({
 </div>
 
 <form method="post" action="" class="properties">
-<fieldset>
-  <legend>{'Common configuration'|translate}</legend>
+  <input type="hidden" name="pwg_token" value="{$LAC_TOKEN}">
+  <fieldset>
+    <legend>{'Age Gate Settings'|translate}</legend>
+    <ul>
+      <li>
+        <label>
+          <input type="checkbox" name="lac_enabled" value="1" {$LAC_ENABLED}>
+          <b>{'Enable Age Gate'|translate}</b>
+        </label>
+        <div class="hint">{'Uncheck to disable all gating logic without uninstalling the plugin.'|translate}</div>
+      </li>
+      <li>
+        <label>
+          <b>{'Fallback URL'|translate}</b>
+          <input type="text" name="lac_fallback_url" value="{$LAC_FALLBACK_URL}" size="60" placeholder="https://example.org/">
+        </label>
+        <div class="hint">{'External URL used when a visitor declines. Must be http(s) and not this host.'|translate}</div>
+      </li>
+      <li>
+        <label>
+          <b>{'Consent Duration (minutes)'|translate}</b>
+          <input type="number" min="0" name="lac_consent_duration" value="{$LAC_CONSENT_DURATION}" size="8">
+        </label>
+        <div class="hint">{'0 = session only. Otherwise re-confirmation required after the elapsed time.'|translate}</div>
+      </li>
+      <li>
+        <label>
+          <input type="checkbox" name="lac_apply_to_logged_in" value="1" {$LAC_APPLY_LOGGED_IN}>
+          <b>{'Apply to Logged-in Users'|translate}</b>
+        </label>
+        <div class="hint">{'If checked, non-admin (regular) users must also confirm age. Administrators and webmasters are always excluded.'|translate}</div>
+      </li>
+    </ul>
+  </fieldset>
 
-  <ul>
-    <li>
-      <label>
-        <input type="checkbox" name="option2" value="1" {if $lac.option2}checked="checked"{/if}>
-        <b>{'Checkbox'|translate}</b>
-      </label>
-      <a class="icon-info-circled-1 showInfo" title="{'Check me!'|translate}"></a>
-    </li>
-    <li class="option1" {if not $lac.option2}style="display:none;"{/if}>
-      <label>
-        <b>{'Integer'|translate}</b>
-        <input type="text" name="option1" value="{$lac.option1}" size="4">
-      </label>
-    </li>
-    <li>
-      <label>
-        <b>{'Select'|translate}</b>
-        {html_options name=option3 options=$select_options selected=$lac.option3}
-      </label>
-    </li>
-  </ul>
-</fieldset>
+  {if !empty($LAC_ERRORS)}
+    <div class="errors">
+      <ul>
+      {foreach from=$LAC_ERRORS item=err}
+        <li>{$err}</li>
+      {/foreach}
+      </ul>
+    </div>
+  {/if}
+  {if $LAC_MESSAGE}
+    <div class="infos">{$LAC_MESSAGE}</div>
+  {/if}
 
-<p class="formButtons"><input type="submit" name="save_config" value="{'Save Settings'|translate}"></p>
-
+  <p class="formButtons"><input type="submit" name="lac_settings_submit" value="{'Save Settings'|translate}"></p>
 </form>

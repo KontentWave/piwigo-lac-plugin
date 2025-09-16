@@ -114,13 +114,24 @@ function lac_is_guest_with_validation(): array
 		if (!is_array($user)) {
 			return LacErrorHandler::success(true, ['reason' => 'user_not_array']);
 		}
-		
-		if (!array_key_exists('is_guest', $user)) {
-			return LacErrorHandler::success(true, ['reason' => 'is_guest_key_missing']);
+
+		// Prefer Piwigo's status field when available
+		if (isset($user['status'])) {
+			$isGuest = (strtolower((string)$user['status']) === 'guest');
+			return LacErrorHandler::success($isGuest, ['user_id' => $user['id'] ?? 'unknown', 'source' => 'status']);
 		}
-		
+
+		// Fallback: compare user id against configured guest id
+		global $conf;
+		if (isset($user['id']) && isset($conf['guest_id'])) {
+			$isGuest = ((string)$user['id'] === (string)$conf['guest_id']);
+			return LacErrorHandler::success($isGuest, ['user_id' => $user['id'], 'source' => 'guest_id']);
+		}
+
+		// Last resort: use is_guest flag if present, assume guest otherwise
 		$isGuest = !empty($user['is_guest']);
-		return LacErrorHandler::success($isGuest, ['user_id' => $user['id'] ?? 'unknown']);
+		$reason = array_key_exists('is_guest', $user) ? 'is_guest_flag' : 'assume_guest_default';
+		return LacErrorHandler::success($isGuest, ['user_id' => $user['id'] ?? 'unknown', 'source' => $reason]);
 		
 	} catch (Exception $e) {
 		$errorHandler = LacErrorHandler::getInstance();
@@ -314,38 +325,42 @@ function lac_get_consent_duration(): int
 function lac_gate_decision_with_validation(): array
 {
 	try {
-		if (function_exists('pwg_get_conf')) {
-			// prefer direct $conf to avoid dependency during early init
-		}
-		global $conf;
-		
-		// Check if gate is enabled
-		if (isset($conf['lac_enabled']) && !$conf['lac_enabled']) { 
+		global $conf, $user;
+		$enabled = isset($conf['lac_enabled']) ? (bool)$conf['lac_enabled'] : true;
+		if (!$enabled) {
 			return LacErrorHandler::success('allow', ['reason' => 'gate_disabled']);
 		}
-		
-		// Check if user is guest
-		$guestResult = lac_is_guest_with_validation();
-		if (!$guestResult['success']) {
-			return $guestResult;
-		}
-		
-		if (!$guestResult['data']) { 
+		$isGuest = (!isset($user['is_guest']) || $user['is_guest']);
+		if (!$isGuest) {
 			return LacErrorHandler::success('allow', ['reason' => 'user_logged_in']);
 		}
-		
-		// Check consent status
-		$consentResult = lac_has_consent_with_validation();
-		if (!$consentResult['success']) {
-			return $consentResult;
+		// Legacy flag semantics (hybrid): ignored when duration > 0, allowed & upgraded when duration == 0
+		$duration = (int)($conf['lac_consent_duration'] ?? 0);
+		if (isset($_SESSION['lac_consent_granted']) && $_SESSION['lac_consent_granted'] === true) {
+			if ($duration === 0) {
+				if (!isset($_SESSION['lac_consent'])) {
+					$_SESSION['lac_consent'] = ['granted' => true, 'timestamp' => time()];
+				}
+				return LacErrorHandler::success('allow', ['reason' => 'legacy_flag_session_only']);
+			}
+			// duration > 0 -> ignore legacy flag, continue to structured check
 		}
-		
-		if ($consentResult['data']) {
-			return LacErrorHandler::success('allow', ['reason' => 'valid_consent']);
+		// Structured consent path
+		if (isset($_SESSION['lac_consent']) && !empty($_SESSION['lac_consent']['granted'])) {
+			if ($duration === 0) {
+				return LacErrorHandler::success('allow', ['reason' => 'session_only']);
+			}
+			$ts = (int)($_SESSION['lac_consent']['timestamp'] ?? 0);
+			if ($ts === 0) {
+				return LacErrorHandler::success('allow', ['reason' => 'missing_timestamp']);
+			}
+			if ((time() - $ts) >= ($duration * 60)) {
+				unset($_SESSION['lac_consent']);
+				return LacErrorHandler::success('redirect', ['reason' => 'expired']);
+			}
+			return LacErrorHandler::success('allow', ['reason' => 'valid_structured']);
 		}
-		
-		return LacErrorHandler::success('redirect', ['reason' => 'no_valid_consent']);
-		
+		return LacErrorHandler::success('redirect', ['reason' => 'no_consent']);
 	} catch (Exception $e) {
 		$errorHandler = LacErrorHandler::getInstance();
 		return $errorHandler->handleError(

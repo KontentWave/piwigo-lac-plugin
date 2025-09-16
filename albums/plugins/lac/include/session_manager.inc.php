@@ -212,14 +212,16 @@ class LacSessionManager {
                 return LacErrorHandler::success(true, ['source' => 'structured_consent']);
             }
             
-            // Check legacy consent flag
+            // Hybrid legacy consent logic: only valid when duration == 0 (session-only mode)
             $legacyResult = $this->get(LAC_SESSION_CONSENT_LEGACY_KEY, false);
-            if (!$legacyResult['success']) {
-                return $legacyResult;
+            if ($legacyResult['success'] && $legacyResult['data']) {
+                $duration = function_exists('lac_get_consent_duration') ? lac_get_consent_duration() : 0;
+                if ($duration === 0) {
+                    return LacErrorHandler::success(true, ['source' => 'legacy_session_only']);
+                }
+                // duration > 0 -> ignore legacy flag
             }
-            
-            $hasConsent = (bool)$legacyResult['data'];
-            return LacErrorHandler::success($hasConsent, ['source' => 'legacy_consent']);
+            return LacErrorHandler::success(false, ['source' => 'no_consent']);
             
         } catch (Exception $e) {
             return $this->errorHandler->handleError(
@@ -316,6 +318,11 @@ class LacSessionManager {
             
             $consent = $consentResult['data'];
             if (!is_array($consent) || empty($consent['granted'])) {
+                // No structured consent: legacy flag handled by hasConsent(), treat as not expired so decision layer can redirect if absent
+                $legacyResult = $this->get(LAC_SESSION_CONSENT_LEGACY_KEY, false);
+                if ($legacyResult['success'] && $legacyResult['data']) {
+                    return LacErrorHandler::success(false, ['reason' => 'legacy_flag']);
+                }
                 return LacErrorHandler::success(true, ['reason' => 'no_consent']);
             }
             

@@ -75,6 +75,9 @@ if (!defined('LAC_CONFIG_FALLBACK_URL')) {
 if (!defined('LAC_CONFIG_CONSENT_DURATION')) {
     define('LAC_CONFIG_CONSENT_DURATION', 'lac_consent_duration');
 }
+if (!defined('LAC_CONFIG_APPLY_LOGGED_IN')) {
+    define('LAC_CONFIG_APPLY_LOGGED_IN', 'lac_apply_to_logged_in');
+}
 
 // URL parameter names
 if (!defined('LAC_PARAM_DEBUG')) {

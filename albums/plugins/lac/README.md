@@ -57,11 +57,12 @@ Expiration Rule: consent valid while `time() < timestamp + (duration_minutes * 6
 
 Settings stored in Piwigo `config` table:
 
-| Key                    | Description                                       |
-| ---------------------- | ------------------------------------------------- |
-| `lac_enabled`          | Master toggle (true/false).                       |
-| `lac_fallback_url`     | External URL for decline action (validated).      |
-| `lac_consent_duration` | Minutes consent remains valid (0 = session-only). |
+| Key                      | Description                                                         |
+| ------------------------ | ------------------------------------------------------------------- |
+| `lac_enabled`            | Master toggle (true/false).                                         |
+| `lac_fallback_url`       | External URL for decline action (validated).                        |
+| `lac_consent_duration`   | Minutes consent remains valid (0 = session-only).                   |
+| `lac_apply_to_logged_in` | Apply gate to logged-in non-admin users (admins/webmasters bypass). |
 
 Changing duration does not retroactively modify existing timestamps; they expire naturally.
 
@@ -90,6 +91,14 @@ Run tests from repository root once test harness is installed:
 composer install
 vendor/bin/phpunit
 ```
+
+## Logged-in User Application Matrix
+
+| User Type          | Setting Off | Setting On |
+| ------------------ | ----------- | ---------- |
+| Guest              | Gated       | Gated      |
+| Logged-in (normal) | Allowed     | Gated      |
+| Admin/Webmaster    | Allowed     | Allowed    |
 
 ## Roadmap / Extension Ideas
 
