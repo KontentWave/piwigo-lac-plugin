@@ -3,6 +3,12 @@
     if (!defined('LAC_CONSENT_ROOT')) {
         define('LAC_CONSENT_ROOT', '/index.php');
     }
+    
+    // Default fallback URL when no configuration is set and no referer available
+    if (!defined('LAC_DEFAULT_FALLBACK_URL')) {
+        define('LAC_DEFAULT_FALLBACK_URL', 'https://www.google.com');
+    }
+    
     $debug = (defined('LAC_DEBUG') && LAC_DEBUG) || isset($_GET['lac_debug']);
     
     // Determine if HTTPS is enabled (moved up for session configuration)
@@ -239,7 +245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
         // Legacy file-based fallbacks removed: DB value only now.
         $protocol   = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
         $currentUrl = "{$protocol}://{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}";
-        $target = $configuredFallback !== '' ? $configuredFallback : (!empty($_SERVER['HTTP_REFERER']) && $_SERVER['HTTP_REFERER'] !== $currentUrl ? $_SERVER['HTTP_REFERER'] : 'https://www.google.com');
+        $target = $configuredFallback !== '' ? $configuredFallback : (!empty($_SERVER['HTTP_REFERER']) && $_SERVER['HTTP_REFERER'] !== $currentUrl ? $_SERVER['HTTP_REFERER'] : LAC_DEFAULT_FALLBACK_URL);
         header('Location: ' . $target);
         exit;
     }

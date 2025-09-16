@@ -20,6 +20,11 @@ if (!defined('LAC_MAX_POST_INPUT_SIZE')) {
     define('LAC_MAX_POST_INPUT_SIZE', 65536); // 64KB limit for any single POST input
 }
 
+// Default fallback URL when no configuration is set and no referer available
+if (!defined('LAC_DEFAULT_FALLBACK_URL')) {
+    define('LAC_DEFAULT_FALLBACK_URL', 'https://www.google.com');
+}
+
 // Cookie configuration
 if (!defined('LAC_COOKIE_NAME')) { 
     define('LAC_COOKIE_NAME', 'LAC'); 
@@ -69,6 +74,34 @@ if (!defined('LAC_CONFIG_FALLBACK_URL')) {
 }
 if (!defined('LAC_CONFIG_CONSENT_DURATION')) {
     define('LAC_CONFIG_CONSENT_DURATION', 'lac_consent_duration');
+}
+
+// URL parameter names
+if (!defined('LAC_PARAM_DEBUG')) {
+    define('LAC_PARAM_DEBUG', 'lac_debug');
+}
+if (!defined('LAC_PARAM_DEBUG_VERBOSE')) {
+    define('LAC_PARAM_DEBUG_VERBOSE', 'lac_debug_verbose');
+}
+/**
+ * Get the default fallback URL from configuration
+ * This allows for easy customization in derived installations
+ * 
+ * @return string Default fallback URL
+ */
+function lac_get_default_fallback_url(): string {
+    // Allow override via environment variable for deployment flexibility
+    if (!empty($_ENV['LAC_DEFAULT_FALLBACK_URL'])) {
+        return $_ENV['LAC_DEFAULT_FALLBACK_URL'];
+    }
+    
+    // Allow override via server variable
+    if (!empty($_SERVER['LAC_DEFAULT_FALLBACK_URL'])) {
+        return $_SERVER['LAC_DEFAULT_FALLBACK_URL'];
+    }
+    
+    // Default to Google as a safe, always-available fallback
+    return LAC_DEFAULT_FALLBACK_URL;
 }
 
 // URL parameter names
