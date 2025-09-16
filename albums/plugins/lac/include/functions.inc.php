@@ -1,11 +1,8 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
-// Load centralized constants, helpers, and error handler
-include_once LAC_PATH . 'include/constants.inc.php';
-include_once LAC_PATH . 'include/database_helper.inc.php';
-include_once LAC_PATH . 'include/session_manager.inc.php';
-include_once LAC_PATH . 'include/error_handler.inc.php';
+// Load centralized bootstrap for all dependencies  
+include_once LAC_PATH . 'include/bootstrap.inc.php';
 
 // Legacy constant definitions kept for backward compatibility (now reference centralized definitions)
 // Maximum allowed length for fallback URL (defensive against extremely large inputs)

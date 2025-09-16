@@ -1,10 +1,8 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
-// Load centralized constants, optimized helpers, and error handler
-include_once LAC_PATH . 'include/constants.inc.php';
-include_once LAC_PATH . 'include/session_manager.inc.php';
-include_once LAC_PATH . 'include/error_handler.inc.php';
+// Load centralized bootstrap for all dependencies
+include_once LAC_PATH . 'include/bootstrap.inc.php';
 
 /**
  * Age Gate Guard for Event Handler (maintains original void signature)

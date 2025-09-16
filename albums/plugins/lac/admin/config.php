@@ -1,10 +1,8 @@
 <?php
 defined('LAC_PATH') or die('Hacking attempt!');
 
-// Load centralized constants, database helper, and error handler
-include_once LAC_PATH . 'include/constants.inc.php';
-include_once LAC_PATH . 'include/database_helper.inc.php';
-include_once LAC_PATH . 'include/error_handler.inc.php';
+// Load centralized bootstrap for all dependencies
+include_once LAC_PATH . 'include/bootstrap.inc.php';
 
 // Ensure required globals are accessible when this file is included from different scopes (e.g., tests)
 global $conf, $page, $template;
