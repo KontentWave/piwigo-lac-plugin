@@ -1,120 +1,156 @@
 # Piwigo Legal Age Consent (LAC)
 
-Legal age gate enforcing explicit confirmation for guest (anonymous) users before any gallery content is shown. Includes admin enable/disable, external decline fallback, configurable consent duration, and resilient session/cookie reconstruction.
+A production-ready age verification (18+) gate for Piwigo. It blocks access to gallery content until users (guests and optionally logged‑in non-admins) explicitly confirm legal age. It supports configurable consent duration, graceful fallback when the plugin is inactive, and secure decline handling.
 
-## What It Does
+## Key Features
 
-On each public request the plugin runs early (`init` hook) and:
+- Init hook enforcement (early redirect before content exposure)
+- Explicit consent page outside gallery root (`/index.php`)
+- Admin settings: enable/disable, external decline URL, consent duration (minutes, 0 = session only), apply-to-logged-in users
+- Consent persistence (session + optional timestamp cookie for reconstruction when active)
+- Expiration handling with strict time window
+- Return-to-last-page after consent (deep link preservation)
+- Session-only automatic fallback if plugin inactive/missing (no fatals, no duration/cookie logic)
+- Secure headers & hardened session handling (HttpOnly, SameSite, optional Secure)
+- User role awareness (admin/webmaster always exempt)
 
-1. Skips logic if plugin disabled (`lac_enabled = false`).
-2. Allows immediately if visitor is an authenticated (non-guest) Piwigo user.
-3. Loads consent state from session (structured) or upgrades legacy flag if present.
-4. If structured consent exists and not expired -> allow.
-5. If missing but a valid timestamp cookie exists (within both configured duration and max window) -> reconstruct session and allow.
-6. Otherwise -> redirect guest to root consent page (`/index.php` outside gallery root) unless already on that page (prevent loop), or to configured external fallback after decline.
+## Folder / File Structure (Expected)
 
-## Consent Flow
-
-1. Guest hits gallery (`/albums/index.php`).
-2. Guard sees no valid consent; redirects to `/index.php` (parent of gallery root).
-3. Consent page renders Yes / No form (+ legal clause markup you customize).
-4. Yes:
-   - Sets `$_SESSION['lac_consent'] = ['granted'=>true,'timestamp'=>time()]` (also keeps legacy boolean for compatibility).
-   - Drops timestamp cookie (name via constant `LAC_COOKIE_NAME`, default `LAC`).
-   - Redirects back to gallery landing page (or original target soon – roadmap).
-5. No:
-   - Redirects to configured external fallback URL (validated: http/https, external host, <=2048 chars) or safe default.
-6. Gallery access allowed until consent expires (if duration > 0) or session ends (duration = 0).
-
-## Consent Storage Model
-
-Structured session payload (primary):
-
-```php
-$_SESSION['lac_consent'] = [
-	'granted'   => true,
-	'timestamp' => 1730000000 // unix seconds
-];
+```
+<web root>/
+  index.php                 # Root consent page (age form + logic)
+  ageconsent.css            # Stylesheet (customizable)
+  legal_clause.html         # Legal / policy text referenced from form
+  .gallerydir               # (Optional) Contains ONLY the gallery directory name if not 'albums'
+  albums/                   # Piwigo gallery root (default if .gallerydir absent)
+    include/common.inc.php  # (Piwigo core)
+    plugins/
+      lac/                  # THIS plugin directory (must remain named 'lac')
+        main.inc.php
+        include/*.inc.php
+        README.md
 ```
 
-Legacy flag (temporary compatibility): `$_SESSION['lac_consent_granted'] = true;` — auto-upgraded on first guard pass.
+Do NOT rename the `lac` directory; Piwigo references the folder name as the plugin ID.
 
-Timestamp Cookie (reconstruction aid): value is original acceptance unix timestamp; reused only if still within admin duration AND within a hard cap window (`LAC_COOKIE_MAX_WINDOW`, 24h) to avoid stale resurrection.
+## Installation
 
-Expiration Rule: consent valid while `time() < timestamp + (duration_minutes * 60)`. Duration `0` means session-only (no time comparison).
+1. Backup First (Strongly Recommended)
 
-## Important Files
+   - Backup database (mysqldump) and gallery root (tar/zip) before deploying.
+   - Verify restore procedure on staging (dry run) before production change.
 
-| File                                                     | Purpose                                                                |
-| -------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `main.inc.php`                                           | Defines constants, registers guard on `init` (deferred includes).      |
-| `include/age_gate.inc.php`                               | Guard logic: guest checks, consent reconstruction, redirects.          |
-| `include/functions.inc.php`                              | Helpers: guest detection, expiration, duration fetch, legacy upgrade.  |
-| `/index.php` (web root)                                  | Consent UI & sets session/cookie state (not part of plugin directory). |
-| `./.github/adr/consent-expiration-and-reconstruction.md` | Architectural decision record for expiration strategy.                 |
+2. Copy Files
 
-## Configuration (Admin UI)
+   a. New Gallery Installation
 
-Settings stored in Piwigo `config` table:
+   - Install Piwigo into a directory (recommended default: `albums`).
+   - If you choose another name (e.g. `gallery`), create a file `.gallerydir` in the web root containing exactly that name (no slashes, no trailing newline issues).
 
-| Key                      | Description                                                         |
-| ------------------------ | ------------------------------------------------------------------- |
-| `lac_enabled`            | Master toggle (true/false).                                         |
-| `lac_fallback_url`       | External URL for decline action (validated).                        |
-| `lac_consent_duration`   | Minutes consent remains valid (0 = session-only).                   |
-| `lac_apply_to_logged_in` | Apply gate to logged-in non-admin users (admins/webmasters bypass). |
+   b. Existing Gallery
 
-Changing duration does not retroactively modify existing timestamps; they expire naturally.
+   - Identify the current gallery root directory name.
+   - If it is not `albums`, create `.gallerydir` with the exact directory name.
+   - Do NOT relocate a working gallery unless you have a tested rollback plan.
 
-## Debugging
+   c. Plugin Files
 
-Append `?lac_debug=1` to any gallery URL to emit minimal guard diagnostics (bootstrap, guest detection, duration, expiration event). Add `&lac_debug_verbose=1` for extra lines (reconstruction, branching decisions). Debug output is lightweight and safe to leave enabled only when needed.
+   - Copy the `lac` folder into `<galleryDir>/plugins/`.
+   - Ensure the path is: `<web root>/<galleryDir>/plugins/lac/main.inc.php`.
 
-## Testing
+   d. Root Consent Assets
 
-Current PHPUnit tests (roadmap to expand) cover:
+   - Place `index.php`, `ageconsent.css`, and `legal_clause.html` in the web root (same level as `<galleryDir>`).
+   - If a root `index.php` already exists, back it up first and manually merge any custom logic—do not overwrite blindly.
 
-- Hook registration (`init`).
-- Guest/consent allow path.
-- Expiration enforcement (non-expired vs expired).
-- Admin validation for fallback URL & duration.
+   e. Optional Customization
 
-Planned additional tests:
+   - Adjust `ageconsent.css` for styling; edit `legal_clause.html` for jurisdiction-specific wording after confirming base flow works.
 
-- Cookie reconstruction path.
-- Legacy flag upgrade.
-- Signed cookie (future) once implemented.
+3. Permissions
 
-Run tests from repository root once test harness is installed:
+   - Ensure the web server user can read plugin files. Standard Piwigo writable directories (upload, \_data, etc.) remain unchanged.
 
-```bash
-composer install
-vendor/bin/phpunit
-```
+4. Activate Plugin
 
-## Logged-in User Application Matrix
+   - Log into Piwigo admin → Plugins → Installed → Activate “LAC”.
 
-| User Type          | Setting Off | Setting On |
-| ------------------ | ----------- | ---------- |
-| Guest              | Gated       | Gated      |
-| Logged-in (normal) | Allowed     | Gated      |
-| Admin/Webmaster    | Allowed     | Allowed    |
+5. Configure
 
-## Roadmap / Extension Ideas
+   - Open the plugin settings page:
+     - Enable Gate (verify it is ON).
+     - Set an external Fallback URL (HTTPS, different host) for declines.
+     - Set Consent Duration (minutes). 0 = session-only (no time-based expiry).
+     - (Optional) Apply to Logged-in Users (non-admins). Admin/webmaster always exempt.
 
-- Signed (HMAC) consent cookie.
-- Allow-list of non-gated informational pages (About / Terms).
-- Expiration warning banner prior to redirect.
-- Localized consent text + translations.
-- Analytics (opt-in) for acceptance vs decline.
-- Admin debug panel: remaining seconds until expiration.
+6. Test
+   - In an incognito/private window open a gallery URL (e.g. `/<galleryDir>/index.php`) → expect redirect to `/index.php`.
+   - Accept → redirected back (or original deep link if captured). Reload root URL → no prompt (same session) unless duration expired.
+   - Decline → redirected to configured external fallback.
 
-## Internal Name / Legacy Info
+## Upgrade
 
-- Directory name fixed: `lac` (must remain unchanged).
-- Historic plugin listing: http://piwigo.org/ext/extension_view.php?eid=543
-- Legacy session flag still recognized (auto-upgraded); slated for removal in a future major iteration.
+- Backup first (DB + files).
+- Replace plugin directory contents with new version (preserve folder name `lac`).
+- Root `index.php`: reapply any local customizations (diff & merge). Avoid editing plugin internals if not necessary.
+- Clear Piwigo template/cache if needed and test guest flow.
+
+## Uninstall / Deactivate
+
+- Deactivating plugin: root page automatically operates in session-only fallback (no duration, no cookie reconstruction, all users gated except existing session consents).
+- To fully remove: deactivate in admin, delete `albums/plugins/lac/`, optionally restore original root `index.php` (or remove age form code if integrated).
+
+## Configuration Keys (Stored in DB)
+
+| Key                      | Purpose                                  |
+| ------------------------ | ---------------------------------------- |
+| `lac_enabled`            | Master toggle                            |
+| `lac_fallback_url`       | Decline redirect (must be external)      |
+| `lac_consent_duration`   | Minutes (0 = session-only)               |
+| `lac_apply_to_logged_in` | Gate logged-in non-admin users when true |
+
+## Fallback Behavior (Important)
+
+If the plugin is inactive or its files are missing, the root consent page automatically:
+
+- Skips cookie reconstruction & duration checks
+- Uses only current PHP session consent markers (`lac_consent` or legacy `lac_consent_granted`)
+- Continues to protect content (no crash) until plugin reactivated
+
+## Precautions & Best Practices
+
+- Always back up before upgrades or root `index.php` changes.
+- Use HTTPS so Secure cookies are enforced (prevents interception).
+- Keep consent duration modest; extremely long windows reduce compliance value.
+- Avoid internal fallback URLs (enforced) to prevent redirect loops.
+- Monitor logs with `?lac_debug=1` only temporarily (avoid noise in production).
+
+## Troubleshooting Quick Table
+
+| Symptom                             | Likely Cause / Fix                              |
+| ----------------------------------- | ----------------------------------------------- |
+| Always prompted even same session   | Session not persisting (check cookie path/name) |
+| Decline goes to Google              | No valid external fallback configured           |
+| Logged-in user gated unexpectedly   | `Apply to Logged-in Users` enabled              |
+| Cookie reconstruction not happening | Plugin inactive OR duration expired             |
+| Admin sees form                     | Plugin inactive (fallback) or mis-detected role |
+
+## Minimal Flow Summary
+
+1. Guest hits gallery → redirected to root consent page.
+2. Accept → session consent stored (+ cookie if plugin active) → redirect back (original target if captured).
+3. Within duration (or same session if duration=0) → access allowed silently; else re-prompt.
+4. Decline → external safe fallback.
+
+## References & Extended Docs
+
+For deeper architectural rationale and decisions:
+
+- Project Sheet: `.github/lac_project_sheet.md`
+- Root Logic ADR: `.github/adr/lac_root_page_logic.md`
+- Expiration & Reconstruction ADR: `.github/adr/consent-expiration-and-reconstruction.md`
+- Feature BDD specs: `.github/features/*.feature`
 
 ## License
 
-See `LICENSE.txt`.
+See `LICENSE.txt` (Piwigo compatible open-source license).
