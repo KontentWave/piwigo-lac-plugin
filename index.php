@@ -13,8 +13,78 @@
     
     // Determine if HTTPS is enabled (moved up for session configuration)
     $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443;
-    
-    // Configure secure session parameters BEFORE starting session
+
+    // Determine gallery (Piwigo) directory (hardcoded to ./albums with optional override via .gallerydir)
+    $gallerydir_path = __DIR__ . '/.gallerydir';
+    $galleryDir = './albums'; // default fallback
+    if (file_exists($gallerydir_path)) {
+        $custom = trim(@file_get_contents($gallerydir_path));
+        if ($custom !== '') {
+            $galleryDir = $custom;
+        }
+    }
+
+    // Phase 6 Part 2: Try to bootstrap Piwigo and plugin (if available) BEFORE starting root session
+    $piwigoBooted = false;
+    $piwigoCommon = __DIR__ . '/albums/include/common.inc.php';
+    if (file_exists($piwigoCommon)) {
+        // Ensure no session is active yet to let Piwigo manage its own (pwg) session
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_write_close();
+        }
+        if (!defined('PHPWG_ROOT_PATH')) {
+            define('PHPWG_ROOT_PATH', __DIR__ . '/albums/');
+        }
+        include_once $piwigoCommon; // provides $user and $conf
+        $piwigoBooted = true;
+        if ($debug) error_log('[LAC DEBUG] Root: Piwigo environment bootstrapped');
+    }
+
+    // Check plugin availability (on disk) and activation (DB), then run exemption logic if active
+    $pluginBootstrap = __DIR__ . '/albums/plugins/lac/include/bootstrap.inc.php';
+    $lacPluginAvailableOnDisk = file_exists($pluginBootstrap);
+    $lacPluginActive = false;
+    if (!empty($piwigoBooted) && function_exists('pwg_query')) {
+        // Determine if plugin is active in DB
+        try {
+            $prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
+            $pluginsTable = lac_safe_table($prefix, 'plugins');
+            $q = "SELECT state FROM `{$pluginsTable}` WHERE id='lac' LIMIT 1";
+            $res = pwg_query($q);
+            if ($res) {
+                $row = pwg_db_fetch_assoc($res);
+                if ($row && isset($row['state']) && $row['state'] === 'active') {
+                    $lacPluginActive = true;
+                }
+            }
+        } catch (Throwable $e) {
+            if ($debug) error_log('[LAC DEBUG] Root: error checking plugin active state: ' . $e->getMessage());
+        }
+    }
+    $lacUsePlugin = $lacPluginAvailableOnDisk && $lacPluginActive && !empty($piwigoBooted);
+    if ($lacUsePlugin) {
+        if (!defined('LAC_PATH')) { define('LAC_PATH', __DIR__ . '/albums/plugins/lac/'); }
+        include_once $pluginBootstrap; // guarded by LAC_PATH in file
+        if ($debug) error_log('[LAC DEBUG] Root: LAC plugin is active, using full exemption logic');
+        if (function_exists('lac_is_user_exempt')) {
+            $exempt = false;
+            try { $exempt = lac_is_user_exempt(); } catch (Throwable $e) { $exempt = false; }
+            if ($exempt) {
+                // Redirect exempt users to gallery index and exit early
+                $target = '/' . trim($galleryDir, './') . '/index.php';
+                header('Location: ' . $target);
+                exit;
+            }
+        }
+    } else if ($debug) {
+        $why = [];
+        if (empty($piwigoBooted)) $why[] = 'Piwigo not booted';
+        if (!$lacPluginAvailableOnDisk) $why[] = 'plugin files missing';
+        if (!$lacPluginActive) $why[] = 'plugin inactive';
+        error_log('[LAC DEBUG] Root: session-only fallback mode (' . implode(', ', $why) . ')');
+    }
+
+    // Configure secure session parameters BEFORE starting root LAC session (only if no session is active)
     if (session_status() === PHP_SESSION_NONE) {
         if ($debug) error_log('[LAC DEBUG] Root: configuring secure session');
         
@@ -42,16 +112,7 @@
             if ($debug) error_log('[LAC DEBUG] Root: session ID regenerated');
         }
     } else {
-        if ($debug) error_log('[LAC DEBUG] Root: session already active');
-    }
-    // Determine gallery (Piwigo) directory (hardcoded to ./albums with optional override via .gallerydir)
-    $gallerydir_path = __DIR__ . '/.gallerydir';
-    $galleryDir = './albums'; // default fallback
-    if (file_exists($gallerydir_path)) {
-        $custom = trim(file_get_contents($gallerydir_path));
-        if ($custom !== '') {
-            $galleryDir = $custom;
-        }
+        if ($debug) error_log('[LAC DEBUG] Root: using existing Piwigo session');
     }
 
     // Accept triggers: legacy field name or our consent buttons; also allow lac_accept=1 for diagnostics
@@ -165,38 +226,56 @@ if (!function_exists('lac_safe_table')) {
     }
 }
 
-// 2) Load configuration needed for consent duration (DB direct lightweight)
+// 2) Load configuration needed for consent duration (skip entirely in fallback session-only mode)
 $consentDuration = 0; // minutes; 0 = session-only
-try {
-    $conf = [];
-    $prefixeTable = 'piwigo_';
-    if (file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
-        include __DIR__ . '/albums/local/config/database.inc.php';
-    }
-    if (!empty($conf['db_host'])) {
-        $mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
-        if ($mysqli) {
-            $configTable = lac_safe_table($prefixeTable, 'config');
-            $stmt = mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
-            if ($stmt) {
-                $param = 'lac_consent_duration';
-                if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
-                    $res = mysqli_stmt_get_result($stmt);
-                    if ($res && ($row = mysqli_fetch_assoc($res))) {
-                        $consentDuration = (int)$row['value'];
-                    }
+if (!empty($lacUsePlugin)) {
+    try {
+        if (!empty($piwigoBooted) && function_exists('pwg_query')) {
+            // Prefer using existing Piwigo DB connection
+            $prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
+            $configTable = lac_safe_table($prefix, 'config');
+            $q = "SELECT value FROM `{$configTable}` WHERE param='lac_consent_duration' LIMIT 1";
+            $res = pwg_query($q);
+            if ($res) {
+                $row = pwg_db_fetch_assoc($res);
+                if ($row && isset($row['value'])) {
+                    $consentDuration = (int)$row['value'];
                 }
-                mysqli_stmt_close($stmt);
-            } else if ($debug) {
-                error_log('[LAC DEBUG] Failed to prepare duration query: ' . mysqli_error($mysqli));
             }
-            mysqli_close($mysqli);
-        } else if ($debug) {
-            error_log('[LAC DEBUG] Database connection failed for consent duration lookup');
+        } else if (!empty($lacUsePlugin)) { // only query DB directly if plugin is in use
+            // Fallback to direct mysqli
+            if (!isset($conf['db_host']) && file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
+                include_once __DIR__ . '/albums/local/config/database.inc.php';
+            }
+            if (!empty($conf['db_host'])) {
+                $lac_mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+                if ($lac_mysqli) {
+                    $lac_prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
+                    $configTable = lac_safe_table($lac_prefix, 'config');
+                    $stmt = mysqli_prepare($lac_mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+                    if ($stmt) {
+                        $param = 'lac_consent_duration';
+                        if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
+                            $res = mysqli_stmt_get_result($stmt);
+                            if ($res && ($row = mysqli_fetch_assoc($res))) {
+                                $consentDuration = (int)$row['value'];
+                            }
+                        }
+                        mysqli_stmt_close($stmt);
+                    } else if ($debug) {
+                        error_log('[LAC DEBUG] Failed to prepare duration query: ' . mysqli_error($lac_mysqli));
+                    }
+                    mysqli_close($lac_mysqli);
+                } else if ($debug) {
+                    error_log('[LAC DEBUG] Database connection failed for consent duration lookup');
+                }
+            }
         }
+    } catch (Throwable $e) { 
+        if ($debug) { error_log('[LAC DEBUG] Error loading consent duration: ' . $e->getMessage()); }
     }
-} catch (Throwable $e) { 
-    if ($debug) { error_log('[LAC DEBUG] Error loading consent duration: ' . $e->getMessage()); }
+} else if ($debug) {
+    error_log('[LAC DEBUG] Root: skipping consent duration lookup (session-only fallback)');
 }
 
 // Helper to mark structured consent
@@ -206,23 +285,63 @@ function lac_mark_consent_structured(?int $ts = null) {
     $_SESSION['lac_consent_granted'] = true; // legacy flag
 }
 
-// 3) If user already has valid cookie+session id, validate duration (Option A strategy)
-$cookie_lifetime = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400; // absolute hard cap for cookie storage
-$cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
-// Allow restoration based on LAC cookie alone; session cookie may differ between root and gallery
-if (isset($_COOKIE[$cookieName]) && ctype_digit($_COOKIE[$cookieName])) {
-    $cookieTs = (int)$_COOKIE[$cookieName];
-    $cookieAge = time() - $cookieTs;
-    $withinCookieWindow = $cookieAge < $cookie_lifetime;
-    $withinConfiguredWindow = ($consentDuration === 0) || ($cookieAge < ($consentDuration * 60));
-    if ($withinCookieWindow && $withinConfiguredWindow) {
-        // Reuse original cookie timestamp so plugin expiration matches root logic
-        lac_mark_consent_structured($cookieTs);
+// 2.7) If consent already present in session, redirect immediately
+try {
+    $hasStructured = isset($_SESSION['lac_consent']) && is_array($_SESSION['lac_consent']) && !empty($_SESSION['lac_consent']['granted']);
+    $ts = $hasStructured ? (int)($_SESSION['lac_consent']['timestamp'] ?? 0) : 0;
+    $hasLegacy = isset($_SESSION['lac_consent_granted']) && $_SESSION['lac_consent_granted'] === true;
+
+    $shouldRedirect = false;
+    if (!empty($lacUsePlugin)) {
+        // Plugin active: respect duration; legacy only allowed in session-only mode
+        if ($hasStructured) {
+            if ($consentDuration === 0) {
+                $shouldRedirect = true;
+            } else if ($ts > 0 && (time() - $ts) < ($consentDuration * 60)) {
+                $shouldRedirect = true;
+            }
+        } elseif ($hasLegacy && $consentDuration === 0) {
+            $shouldRedirect = true; // session-only mode accepts legacy
+        }
+    } else {
+        // Fallback: session-only policy. Any of structured or legacy means OK.
+        if ($hasStructured || $hasLegacy) {
+            $shouldRedirect = true;
+        }
+    }
+
+    if ($shouldRedirect) {
+        if ($debug) error_log('[LAC DEBUG] Root: session already has consent; redirecting without prompting');
         $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($galleryDir, './') . '/index.php');
         unset($_SESSION['LAC_REDIRECT']);
-        header("Location: " . $target);
+        header('Location: ' . $target);
         exit;
     }
+} catch (Throwable $e) {
+    if ($debug) error_log('[LAC DEBUG] Root: error during session-consent check: ' . $e->getMessage());
+}
+
+// 3) If plugin is active and available, allow cookie-based auto-recognition; otherwise skip (session-only fallback)
+$cookie_lifetime = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400; // absolute hard cap for cookie storage
+$cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
+// Allow restoration based on LAC cookie alone only when plugin is truly in use
+if (!empty($lacUsePlugin)) {
+    if (isset($_COOKIE[$cookieName]) && ctype_digit($_COOKIE[$cookieName])) {
+        $cookieTs = (int)$_COOKIE[$cookieName];
+        $cookieAge = time() - $cookieTs;
+        $withinCookieWindow = $cookieAge < $cookie_lifetime;
+        $withinConfiguredWindow = ($consentDuration === 0) || ($cookieAge < ($consentDuration * 60));
+        if ($withinCookieWindow && $withinConfiguredWindow) {
+            // Reuse original cookie timestamp so plugin expiration matches root logic
+            lac_mark_consent_structured($cookieTs);
+            $target = $_SESSION['LAC_REDIRECT'] ?? ('/' . trim($galleryDir, './') . '/index.php');
+            unset($_SESSION['LAC_REDIRECT']);
+            header("Location: " . $target);
+            exit;
+        }
+    }
+} else if ($debug) {
+    error_log('[LAC DEBUG] Root: skipping cookie reconstruction (session-only fallback)');
 }
 
 // 3) Handle form submission
@@ -256,34 +375,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['consent'])) {
         $configuredFallback = '';
         // Attempt to read value directly from Piwigo config table to avoid filesystem permission issues.
         try {
-            // Minimal bootstrap: load database credentials and perform a direct query.
-            $conf = [];
-            $prefixeTable = 'piwigo_'; // default fallback; will be overridden by include
-            if (file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
-                include __DIR__ . '/albums/local/config/database.inc.php';
-            }
-            if (!empty($conf['db_host'])) {
-                $mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
-                if ($mysqli) {
-                    $configTable = lac_safe_table($prefixeTable, 'config');
-                    $stmt = mysqli_prepare($mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
-                    if ($stmt) {
-                        $param = 'lac_fallback_url';
-                        if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
-                            $res = mysqli_stmt_get_result($stmt);
-                            if ($res && ($row = mysqli_fetch_assoc($res))) {
-                                $val = $row['value'];
-                                if ($val === 'false') { $val = ''; }
-                                if ($val !== 'true' && $val !== 'false') { $configuredFallback = trim($val); }
-                            }
-                        }
-                        mysqli_stmt_close($stmt);
-                    } else if ($debug) {
-                        error_log('[LAC DEBUG] Failed to prepare fallback URL query: ' . mysqli_error($mysqli));
+            if (!empty($piwigoBooted) && function_exists('pwg_query')) {
+                $prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
+                $configTable = lac_safe_table($prefix, 'config');
+                $q = "SELECT value FROM `{$configTable}` WHERE param='lac_fallback_url' LIMIT 1";
+                $res = pwg_query($q);
+                if ($res) {
+                    $row = pwg_db_fetch_assoc($res);
+                    if ($row && isset($row['value'])) {
+                        $val = $row['value'];
+                        if ($val === 'false') { $val = ''; }
+                        if ($val !== 'true' && $val !== 'false') { $configuredFallback = trim($val); }
                     }
-                    mysqli_close($mysqli);
-                } else if ($debug) {
-                    error_log('[LAC DEBUG] Database connection failed for fallback URL lookup');
+                }
+            } else {
+                // Direct mysqli fallback
+                if (!isset($conf['db_host']) && file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
+                    include_once __DIR__ . '/albums/local/config/database.inc.php';
+                }
+                if (!empty($conf['db_host'])) {
+                    $lac_mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+                    if ($lac_mysqli) {
+                        $lac_prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
+                        $configTable = lac_safe_table($lac_prefix, 'config');
+                        $stmt = mysqli_prepare($lac_mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+                        if ($stmt) {
+                            $param = 'lac_fallback_url';
+                            if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
+                                $res = mysqli_stmt_get_result($stmt);
+                                if ($res && ($row = mysqli_fetch_assoc($res))) {
+                                    $val = $row['value'];
+                                    if ($val === 'false') { $val = ''; }
+                                    if ($val !== 'true' && $val !== 'false') { $configuredFallback = trim($val); }
+                                }
+                            }
+                            mysqli_stmt_close($stmt);
+                        } else if ($debug) {
+                            error_log('[LAC DEBUG] Failed to prepare fallback URL query: ' . mysqli_error($lac_mysqli));
+                        }
+                        mysqli_close($lac_mysqli);
+                    } else if ($debug) {
+                        error_log('[LAC DEBUG] Database connection failed for fallback URL lookup');
+                    }
                 }
             }
         } catch (Throwable $e) {

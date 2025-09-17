@@ -485,3 +485,80 @@ function lac_sanitize_fallback_url(string $url, bool $disallow_internal = false)
 
 // (Legacy file-based fallback removed; lac_fallback_url now stored only in DB.)
 
+
+/**
+ * Determine if the current user is exempt from age gating.
+ * Contract:
+ * - Inputs: none (uses $user, $conf, session/cookie via helpers)
+ * - Output: bool (true = exempt, false = not exempt)
+ * - Error modes: On any internal error or missing dependency, return false (not exempt) without throwing
+ * Rules:
+ * - If gate globally disabled (lac_enabled = false): exempt
+ * - Admin/Webmaster: exempt always
+ * - Logged-in non-admin: exempt when lac_apply_to_logged_in = false; otherwise require consent like guests
+ * - Guest: not exempt unless valid consent present (duration rules apply via session manager)
+ */
+if (!function_exists('lac_is_user_exempt')) {
+function lac_is_user_exempt(): bool
+{
+	try {
+		global $conf, $user;
+
+		// If config array not available, be conservative (not exempt) but avoid fatals
+		if (!isset($conf) || !is_array($conf)) {
+			return false;
+		}
+
+		// If gate is disabled globally, everyone is exempt
+		$enabled = isset($conf[LAC_CONFIG_ENABLED]) ? (bool)$conf[LAC_CONFIG_ENABLED] : true;
+		if ($enabled === false) {
+			return true;
+		}
+
+		// Admin/webmaster bypass
+		$isAdmin = false;
+		if (isset($user) && is_array($user)) {
+			$status = isset($user['status']) ? strtolower((string)$user['status']) : '';
+			$isAdmin = (!empty($user['is_admin'])) || ($status === 'admin' || $status === 'webmaster');
+		}
+		if ($isAdmin) {
+			return true;
+		}
+
+		// Determine if user is guest
+		$guestCheck = lac_is_guest_with_validation();
+		$isGuest = $guestCheck['success'] ? (bool)$guestCheck['data'] : true; // default to guest on error
+
+		// Determine setting for applying to logged-in users
+		$applyToLoggedIn = isset($conf[LAC_CONFIG_APPLY_LOGGED_IN]) ? (bool)$conf[LAC_CONFIG_APPLY_LOGGED_IN] : false;
+
+		if (!$isGuest) {
+			// Logged-in non-admin
+			if ($applyToLoggedIn === false) {
+				return true; // exempt when not applying to logged-in users
+			}
+			// When applying to logged-in, require consent checks like guests
+		}
+
+		// For guests or logged-in when applyToLoggedIn=true: require consent
+		$hasConsent = lac_has_consent();
+		if ($hasConsent) {
+			// Additionally enforce expiry when duration > 0
+			$duration = lac_get_consent_duration();
+			if ($duration > 0) {
+				$expired = lac_consent_expired($duration);
+				return !$expired;
+			}
+			return true; // session-only consent present
+		}
+
+		// No valid consent → not exempt
+		return false;
+
+	} catch (Throwable $e) {
+		// Do not throw; be conservative
+		return false;
+	}
+}
+}
+
