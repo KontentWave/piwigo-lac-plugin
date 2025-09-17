@@ -44,6 +44,16 @@
     } else {
         if ($debug) error_log('[LAC DEBUG] Root: session already active');
     }
+    // Determine gallery (Piwigo) directory (hardcoded to ./albums with optional override via .gallerydir)
+    $gallerydir_path = __DIR__ . '/.gallerydir';
+    $galleryDir = './albums'; // default fallback
+    if (file_exists($gallerydir_path)) {
+        $custom = trim(file_get_contents($gallerydir_path));
+        if ($custom !== '') {
+            $galleryDir = $custom;
+        }
+    }
+
     // Accept triggers: legacy field name or our consent buttons; also allow lac_accept=1 for diagnostics
     $accept = false;
     if (isset($_POST['consent']) && $_POST['consent']==='18+') { $accept = true; }
@@ -69,46 +79,82 @@
             ]);
         }
         
+        // Determine target: prefer saved intended destination (Phase 6)
+        $target = '';
+        if (!empty($_SESSION['LAC_REDIRECT'])) {
+            $candidate = $_SESSION['LAC_REDIRECT'];
+            // Basic validation: same-origin and under gallery path if relative
+            $isValid = false;
+            $parsed = @parse_url($candidate);
+            if ($parsed !== false) {
+                $candidateHost = $parsed['host'] ?? '';
+                $candidateScheme = $parsed['scheme'] ?? '';
+                $candidatePath = $parsed['path'] ?? '';
+                $currentHost = $_SERVER['HTTP_HOST'] ?? '';
+                $isSameOrigin = ($candidateHost === '' || strcasecmp($candidateHost, $currentHost) === 0);
+                // Accept relative or same-origin absolute URLs; also ensure it points to the gallery subtree
+                $galleryPrefix = '/' . trim($galleryDir, './') . '/';
+                $pointsToGallery = (strpos($candidatePath, $galleryPrefix) === 0) || ($candidatePath === '/');
+                if ($isSameOrigin && ($candidateHost === '' || in_array(strtolower($candidateScheme), ['http','https',''], true)) && $pointsToGallery) {
+                    $isValid = true;
+                }
+            }
+            if ($isValid) {
+                $target = $candidate;
+            }
+            unset($_SESSION['LAC_REDIRECT']); // one-time use
+        }
+
         // Regenerate session ID on consent for additional security
         session_regenerate_id(true);
         $_SESSION['lac_session_regenerated'] = time();
         
         if ($debug) error_log('[LAC DEBUG] Root: consent accepted, session regenerated');
+        
+        // If no valid saved target, fall back to existing behavior
+        if ($target === '') {
+            $target = '/' . trim($galleryDir, './') . '/index.php';
+        }
+        header('Location: ' . $target);
+        exit;
     }
 
 // Configure session cookie parameters with HttpOnly, Secure, and SameSite attributes
 // Session parameters are now configured before session_start() for better security
 if ($debug) error_log('[LAC DEBUG] Root: session cookie name=' . session_name());
 
-// Determine gallery (Piwigo) directory (hardcoded to ./albums with optional override via .gallerydir)
-$gallerydir_path = __DIR__ . '/.gallerydir';
-$galleryDir = './albums'; // default fallback
-if (file_exists($gallerydir_path)) {
-    $custom = trim(file_get_contents($gallerydir_path));
-    if ($custom !== '') {
-        $galleryDir = $custom;
-    }
-}
+// (galleryDir determined above before accept handling)
 
 // 1) Handle incoming redirect parameter on GET
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['redirect'])) {
     $raw = $_GET['redirect'];
-    // Decode, parse, strip sid, rebuild
     $url = urldecode($raw);
     $parts = parse_url($url);
     $path  = $parts['path'] ?? '';
-    parse_str($parts['query'] ?? '', $qs);
-    unset($qs['sid']);              // REMOVE the session id!
-    $clean = $path;
-    if (!empty($qs)) {
-        $clean .= '?' . http_build_query($qs);
-    }
-    // Allow any path under /albums (or custom galleryDir), fallback to gallery index if not matching
-    if (preg_match('#^/' . preg_quote(trim($galleryDir, './'), '#') . '(/|$)#', $clean)) {
-        $_SESSION['LAC_REDIRECT'] = $clean;
-    } else {
-        // If not a gallery path, fallback to gallery index
+    $query = $parts['query'] ?? '';
+    // Same-origin check when an absolute URL is provided
+    if (isset($parts['host']) && $parts['host'] !== '' && isset($_SERVER['HTTP_HOST']) && strcasecmp($parts['host'], $_SERVER['HTTP_HOST']) !== 0) {
+        // Cross-origin not allowed; fallback to gallery index
         $_SESSION['LAC_REDIRECT'] = '/' . trim($galleryDir, './') . '/index.php';
+    } else {
+        // Strip only sid= from the raw query while preserving PATH_INFO-style (e.g. "/photo/123")
+        if ($query !== '') {
+            // Remove sid anywhere it appears as a key-value pair
+            $query = preg_replace('/(^|[&;])sid=[^&;]*/i', '$1', $query);
+            // Clean leftover separators
+            $query = trim($query, '&;');
+        }
+        $clean = $path;
+        if ($query !== '') {
+            $clean .= '?' . $query;
+        }
+        // Allow any path under /albums (or custom galleryDir), fallback to gallery index if not matching
+        if (preg_match('#^/' . preg_quote(trim($galleryDir, './'), '#') . '(/|$)#', $clean)) {
+            $_SESSION['LAC_REDIRECT'] = $clean;
+        } else {
+            // If not a gallery path, fallback to gallery index
+            $_SESSION['LAC_REDIRECT'] = '/' . trim($galleryDir, './') . '/index.php';
+        }
     }
 }
 // Helper: validate table prefix (allow only alnum + underscore) and append suffix

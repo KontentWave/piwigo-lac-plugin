@@ -182,7 +182,21 @@ function lac_age_gate_guard_with_error_handling(): array
 
     // Build redirect absolute or relative path: root index one level above gallery? Provided spec: "root index.php"
     // We assume gallery is deployed at /var/www/piwigo/ and root index is one level up (web root). For runtime we just send '/index.php'.
-    $target = '/index.php';
+    // Phase 6: Save intended destination before redirecting
+    $savedUri = '';
+    if (!$isConsentPage) {
+      $uri = $_SERVER['REQUEST_URI'] ?? '/';
+      // Save relative URI for readability (root will validate and persist)
+      $_SESSION['LAC_REDIRECT'] = $uri;
+      $savedUri = $uri;
+      if ($debug_mode) { error_log('[LAC DEBUG] Saved intended URI for post-consent redirect: ' . $_SESSION['LAC_REDIRECT']); }
+    }
+    // Include intended URL as redirect parameter (production only) so root can capture it even if sessions differ
+    $redirParam = '';
+    if (!$test_mode && !empty($savedUri) && $savedUri !== '/') {
+      $redirParam = '?redirect=' . rawurlencode($savedUri);
+    }
+    $target = '/index.php' . $redirParam;
 
     if ($test_mode) {
       // In test collect intended redirect
