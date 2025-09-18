@@ -9,8 +9,14 @@ defined('LAC_PATH') or die('Hacking attempt!');
 global $template, $page, $conf;
 
 
-// get current tab
-$page['tab'] = isset($_GET['tab']) ? $_GET['tab'] : $page['tab'] = 'home';
+// get current tab (default now 'config' since legacy 'home' welcome tab removed)
+$page['tab'] = isset($_GET['tab']) ? $_GET['tab'] : 'config';
+
+// Whitelist of valid tabs to prevent inclusion of removed/unknown pages
+$valid_tabs = array('config', 'photo');
+if (!in_array($page['tab'], $valid_tabs, true)) {
+  $page['tab'] = 'config';
+}
 
 // plugin tabsheet is not present on photo page
 if ($page['tab'] != 'photo')
@@ -20,7 +26,7 @@ if ($page['tab'] != 'photo')
   $tabsheet = new tabsheet();
   $tabsheet->set_id('lac');
 
-  $tabsheet->add('home', l10n('Welcome'), LAC_ADMIN . '-home');
+  // Only configuration tab remains ("Welcome" tab removed as cosmetic skeleton artifact)
   $tabsheet->add('config', l10n('Configuration'), LAC_ADMIN . '-config');
   $tabsheet->select($page['tab']);
   $tabsheet->assign();
