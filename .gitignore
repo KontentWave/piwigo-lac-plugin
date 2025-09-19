@@ -10,7 +10,7 @@
 !/.gitmodules
 !/.github/
 !/tests/
-!/vendor/
+/vendor/
 
 # Allow albums path
 !/albums/
