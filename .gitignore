@@ -28,3 +28,4 @@
 
 # Allow submodule mount point (directory entry only)
 !/albums/plugins/core_privacy_toggle
+/albums/plugins/core_privacy_toggle/
