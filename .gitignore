@@ -8,6 +8,9 @@
 !/legal_clause.html
 !/.gitignore
 !/.gitmodules
+!/.github/
+!/tests/
+!/vendor/
 
 # Allow albums path
 !/albums/
