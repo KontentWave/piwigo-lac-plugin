@@ -1,0 +1,43 @@
+/* legal_clause.css */
+
+body.legal-clause-page {
+  font-family: sans-serif;
+  background-color: #f9f9f9;
+  color: #333;
+  line-height: 1.6;
+  margin: 0;
+  padding: 20px;
+}
+
+.legal-clause-container {
+  max-width: 800px;
+  margin: 20px auto;
+  background-color: #fff;
+  padding: 30px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+.legal-clause-container h1 {
+  font-size: 2em;
+  margin-bottom: 20px;
+  color: #333;
+  text-align: center;
+}
+
+.legal-clause-container p {
+  margin-bottom: 15px;
+}
+
+.legal-clause-container ol {
+  padding-left: 25px;
+  margin-bottom: 20px;
+}
+
+.legal-clause-container li {
+  margin-bottom: 10px;
+}
+
+.legal-clause-container b {
+  font-weight: bold; /* Make "Je prísne zakázané:" bold */
+}

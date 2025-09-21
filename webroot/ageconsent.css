@@ -1,0 +1,107 @@
+/* ageconsent.css (in your root directory) */
+
+body.age-consent-page {
+  font-family: sans-serif;
+  background-color: #f0f0f0;
+  margin: 0;
+  padding: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+}
+
+.age-consent-container {
+  background-color: white;
+  padding: 30px;
+  border-radius: 8px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  text-align: center;
+  max-width: 600px;
+  margin: 20px; /* Add default margin for larger screens */
+}
+
+.age-consent-container h1 {
+  color: #333;
+  margin-bottom: 20px;
+  font-size: 2em; /* Default heading size */
+}
+
+.age-consent-container h2 {
+  font-size: 1.5em; /* Default subheading size */
+  margin-bottom: 15px;
+}
+
+.age-consent-container p {
+  color: #555;
+  line-height: 1.6;
+  margin-bottom: 30px;
+}
+
+.age-consent-container button {
+  padding: 12px 25px;
+  border: solid 2px;
+  border-radius: 5px;
+  font-size: 1rem;
+  cursor: pointer;
+  min-width: 150px; /* Minimum width for buttons */
+}
+
+.age-consent-container button:first-child {
+  background-color: #5cb85c;
+  color: white;
+}
+
+.age-consent-container button:first-child:hover {
+  background-color: #4cae4c;
+}
+
+.age-consent-container button:last-child {
+  background-color: #d9534f;
+  color: white;
+}
+
+.age-consent-container button:last-child:hover {
+  background-color: #c9302c;
+}
+
+/* Media Query for smaller screens (e.g., tablets and phones) */
+@media (max-width: 768px) {
+  body.age-consent-page {
+    padding: 10px; /* Reduce body padding on small screens */
+  }
+
+  .age-consent-container {
+    padding: 20px; /* Reduce container padding on small screens */
+    margin: 10px; /* Reduce container margin on small screens */
+    max-width: 95%; /* Allow container to take up more width on small screens */
+  }
+
+  .age-consent-container h1 {
+    font-size: 1.8em; /* Slightly smaller heading on small screens */
+  }
+
+  .age-consent-container h2 {
+    font-size: 1.3em; /* Slightly smaller subheading on small screens */
+  }
+
+  .age-consent-container p {
+    margin-bottom: 20px; /* Slightly less margin for paragraphs on small screens */
+  }
+
+  .age-consent-container button {
+    padding: 10px 20px; /* Slightly smaller button padding */
+    font-size: 0.9rem; /* Slightly smaller button font size */
+    min-width: 0; /* Remove min-width to allow buttons to shrink on very small screens */
+    width: calc(
+      50% - 15px
+    ); /* Make buttons take up half width minus some margin */
+    box-sizing: border-box; /* Include padding and border in button width calculation */
+    margin-bottom: 10px; /* Add margin between buttons when stacked */
+  }
+
+  .age-consent-container button:first-child,
+  .age-consent-container button:last-child {
+    display: inline-block; /* Ensure buttons are inline-block for width control */
+  }
+}

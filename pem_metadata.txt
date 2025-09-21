@@ -1,0 +1,4 @@
+File automatically created from SVN or Git repository.
+
+URL: https://github.com/Piwigo/Piwigo-Skeleton 
+Revision: cf7e9a8d61ed9b15a9242a39566cc11b7a070dc4 (Wed Nov 17 14:50:58 2021 +0100)
