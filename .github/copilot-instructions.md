@@ -7,6 +7,25 @@ These instructions capture project-specific knowledge so an AI agent can be prod
 - **Piwigo Version:** `15.6.0`
 - **PHP Version (Target):** `8.1+`
 
+## CONTEXT: Files under webroot/ are deployed to the Piwigo root:
+
+- webroot/index.php → /var/www/piwigo/index.php
+- webroot/ageconsent.css → /var/www/piwigo/ageconsent.css
+- webroot/legal_clause.css → /var/www/piwigo/legal_clause.css
+- webroot/legal_clause.html → /var/www/piwigo/legal_clause.html
+- webroot/.gallerydir → /var/www/piwigo/.gallerydir
+
+## CONTEXT: GitHub metadata
+
+- The root `.github/` is always a symlink to the active plugin’s `.github` folder.
+  Example: `.github → albums/plugins/lac/.github`
+  This means issue templates, workflows, etc. come from the active plugin repo.
+
+## Symlinks note
+
+- Files above appear at Piwigo root via symlinks; treat them as if they were real files in root.
+- `.github` is always symlinked to the active plugin’s `.github/`.
+
 ## Scope & Architecture
 
 - This workspace contains a Piwigo gallery plus a custom plugin `lac` (Legal Age Consent) under `albums/plugins/lac/`.
