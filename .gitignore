@@ -1,2 +1,9 @@
+# Ignore vendor + test output
 /vendor/
 /tests/_output/
+
+# Ignore Composer lockfile if you don’t want it in plugin repo
+composer.lock
+
+# Everything else should be tracked (plugin source, webroot/, .github/, docs)
+
