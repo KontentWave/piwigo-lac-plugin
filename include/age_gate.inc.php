@@ -165,14 +165,25 @@ function lac_age_gate_guard_with_error_handling(): array
       error_log('[LAC DEBUG] No valid consent found, redirecting to consent page'); 
     }
 
-    // Avoid redirect loop if already on the consent page itself (defensive) - detect by script filename
+    // Avoid redirect loop if already on the consent page itself (defensive):
+    // Compare path-only to handle query parameters like ?redirect=...
     $currentScript = $_SERVER['SCRIPT_NAME'] ?? '';
     $currentUri = $_SERVER['REQUEST_URI'] ?? $currentScript;
+    $currentPath = $currentUri;
+    $parsedPath = @parse_url($currentUri, PHP_URL_PATH);
+    if (is_string($parsedPath) && $parsedPath !== '') {
+      $currentPath = $parsedPath;
+    }
     // Allow defining consent root explicitly (set in root index.php) for reliability across rewrites/aliases
     if (!defined('LAC_CONSENT_ROOT')) {
       define('LAC_CONSENT_ROOT', '/index.php');
     }
-    $isConsentPage = ($currentScript === LAC_CONSENT_ROOT) || ($currentUri === LAC_CONSENT_ROOT) || ($currentUri === rtrim(LAC_CONSENT_ROOT,'/'));
+    if ($debug_mode && isset($_GET['lac_debug_verbose'])) {
+      error_log('[LAC DEBUG] Loop-guard inspect: SCRIPT_NAME=' . $currentScript . ' REQUEST_URI=' . $currentUri . ' PATH=' . $currentPath . ' CONSENT_ROOT=' . LAC_CONSENT_ROOT);
+    }
+    $isConsentPage = ($currentScript === LAC_CONSENT_ROOT)
+      || ($currentPath === LAC_CONSENT_ROOT)
+      || (rtrim($currentPath, '/') === rtrim(LAC_CONSENT_ROOT, '/'));
     if ($isConsentPage) {
       if ($debug_mode) { 
         error_log('[LAC DEBUG] Detected consent root ("'.LAC_CONSENT_ROOT.'"), skipping redirect'); 
@@ -197,6 +208,13 @@ function lac_age_gate_guard_with_error_handling(): array
       $redirParam = '?redirect=' . rawurlencode($savedUri);
     }
     $target = '/index.php' . $redirParam;
+    // Propagate debug flags to consent page so we can observe root logs during diagnostics
+    if (isset($_GET['lac_debug'])) {
+      $target .= ($redirParam === '' ? '?' : '&') . 'lac_debug=1';
+      if (isset($_GET['lac_debug_verbose'])) {
+        $target .= '&lac_debug_verbose=1';
+      }
+    }
 
     if ($test_mode) {
       // In test collect intended redirect

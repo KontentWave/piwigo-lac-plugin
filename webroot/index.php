@@ -10,6 +10,12 @@
     }
     
     $debug = (defined('LAC_DEBUG') && LAC_DEBUG) || isset($_GET['lac_debug']);
+    if ($debug) {
+        $tmpLog = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'piwigo-lac.log';
+        @ini_set('log_errors', 'On');
+        @ini_set('error_log', $tmpLog);
+        error_log('[LAC DEBUG] Root: logging to ' . $tmpLog);
+    }
     
     // Determine if HTTPS is enabled (moved up for session configuration)
     $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443;
@@ -198,13 +204,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['redirect'])) {
         // Cross-origin not allowed; fallback to gallery index
         $_SESSION['LAC_REDIRECT'] = '/' . trim($galleryDir, './') . '/index.php';
     } else {
-        // Strip only sid= from the raw query while preserving PATH_INFO-style (e.g. "/photo/123")
-        if ($query !== '') {
-            // Remove sid anywhere it appears as a key-value pair
-            $query = preg_replace('/(^|[&;])sid=[^&;]*/i', '$1', $query);
-            // Clean leftover separators
-            $query = trim($query, '&;');
-        }
+        // Preserve full query string, including potential "sid" parameter used by Piwigo
+        // Previous implementation stripped "sid", which can cause redirect loops if Piwigo
+        // relies on it for session continuity (especially with cookie path differences).
+        // We keep the query intact and rely on same-origin + gallery-subtree checks below.
         $clean = $path;
         if ($query !== '') {
             $clean .= '?' . $query;
@@ -226,56 +229,58 @@ if (!function_exists('lac_safe_table')) {
     }
 }
 
-// 2) Load configuration needed for consent duration (skip entirely in fallback session-only mode)
-$consentDuration = 0; // minutes; 0 = session-only
-if (!empty($lacUsePlugin)) {
-    try {
-        if (!empty($piwigoBooted) && function_exists('pwg_query')) {
-            // Prefer using existing Piwigo DB connection
-            $prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
-            $configTable = lac_safe_table($prefix, 'config');
-            $q = "SELECT value FROM `{$configTable}` WHERE param='lac_consent_duration' LIMIT 1";
-            $res = pwg_query($q);
-            if ($res) {
-                $row = pwg_db_fetch_assoc($res);
-                if ($row && isset($row['value'])) {
-                    $consentDuration = (int)$row['value'];
-                }
-            }
-        } else if (!empty($lacUsePlugin)) { // only query DB directly if plugin is in use
-            // Fallback to direct mysqli
-            if (!isset($conf['db_host']) && file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
-                include_once __DIR__ . '/albums/local/config/database.inc.php';
-            }
-            if (!empty($conf['db_host'])) {
-                $lac_mysqli = mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
-                if ($lac_mysqli) {
-                    $lac_prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
-                    $configTable = lac_safe_table($lac_prefix, 'config');
-                    $stmt = mysqli_prepare($lac_mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
-                    if ($stmt) {
-                        $param = 'lac_consent_duration';
-                        if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
-                            $res = mysqli_stmt_get_result($stmt);
-                            if ($res && ($row = mysqli_fetch_assoc($res))) {
-                                $consentDuration = (int)$row['value'];
-                            }
-                        }
-                        mysqli_stmt_close($stmt);
-                    } else if ($debug) {
-                        error_log('[LAC DEBUG] Failed to prepare duration query: ' . mysqli_error($lac_mysqli));
-                    }
-                    mysqli_close($lac_mysqli);
-                } else if ($debug) {
-                    error_log('[LAC DEBUG] Database connection failed for consent duration lookup');
-                }
+// 2) Load configuration needed for consent duration
+// minutes; 0 = session-only when KNOWN. If unknown, we won't auto-redirect based on session.
+$consentDuration = 0;
+$consentDurationKnown = false;
+try {
+    if (!empty($piwigoBooted) && function_exists('pwg_query')) {
+        // Prefer using existing Piwigo DB connection
+        $prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
+        $configTable = lac_safe_table($prefix, 'config');
+        $q = "SELECT value FROM `{$configTable}` WHERE param='lac_consent_duration' LIMIT 1";
+        $res = pwg_query($q);
+        if ($res) {
+            $row = pwg_db_fetch_assoc($res);
+            if ($row && isset($row['value'])) {
+                $consentDuration = (int)$row['value'];
+                $consentDurationKnown = true;
             }
         }
-    } catch (Throwable $e) { 
-        if ($debug) { error_log('[LAC DEBUG] Error loading consent duration: ' . $e->getMessage()); }
+    } else {
+        // Fallback to direct mysqli (even when plugin not booted) to honor configured duration in root flows
+        if (!isset($conf['db_host']) && file_exists(__DIR__ . '/albums/local/config/database.inc.php')) {
+            include_once __DIR__ . '/albums/local/config/database.inc.php';
+        }
+        if (!empty($conf['db_host'])) {
+            $lac_mysqli = @mysqli_connect($conf['db_host'], $conf['db_user'], $conf['db_password'], $conf['db_base']);
+            if ($lac_mysqli) {
+                $lac_prefix = isset($conf['db_prefix']) ? $conf['db_prefix'] : 'piwigo_';
+                $configTable = lac_safe_table($lac_prefix, 'config');
+                $stmt = @mysqli_prepare($lac_mysqli, "SELECT value FROM `{$configTable}` WHERE param=? LIMIT 1");
+                if ($stmt) {
+                    $param = 'lac_consent_duration';
+                    if (mysqli_stmt_bind_param($stmt, 's', $param) && mysqli_stmt_execute($stmt)) {
+                        $res = mysqli_stmt_get_result($stmt);
+                        if ($res && ($row = mysqli_fetch_assoc($res))) {
+                            $consentDuration = (int)$row['value'];
+                            $consentDurationKnown = true;
+                        }
+                    }
+                    mysqli_stmt_close($stmt);
+                } else if ($debug) {
+                    error_log('[LAC DEBUG] Failed to prepare duration query: ' . mysqli_error($lac_mysqli));
+                }
+                mysqli_close($lac_mysqli);
+            } else if ($debug) {
+                error_log('[LAC DEBUG] Database connection failed for consent duration lookup');
+            }
+        } else if ($debug) {
+            error_log('[LAC DEBUG] Database config not available; consent duration unknown');
+        }
     }
-} else if ($debug) {
-    error_log('[LAC DEBUG] Root: skipping consent duration lookup (session-only fallback)');
+} catch (Throwable $e) { 
+    if ($debug) { error_log('[LAC DEBUG] Error loading consent duration: ' . $e->getMessage()); }
 }
 
 // Helper to mark structured consent
@@ -285,29 +290,28 @@ function lac_mark_consent_structured(?int $ts = null) {
     $_SESSION['lac_consent_granted'] = true; // legacy flag
 }
 
-// 2.7) If consent already present in session, redirect immediately
+// 2.7) If consent already present in session, redirect immediately (only if still valid)
 try {
     $hasStructured = isset($_SESSION['lac_consent']) && is_array($_SESSION['lac_consent']) && !empty($_SESSION['lac_consent']['granted']);
     $ts = $hasStructured ? (int)($_SESSION['lac_consent']['timestamp'] ?? 0) : 0;
     $hasLegacy = isset($_SESSION['lac_consent_granted']) && $_SESSION['lac_consent_granted'] === true;
 
     $shouldRedirect = false;
-    if (!empty($lacUsePlugin)) {
-        // Plugin active: respect duration; legacy only allowed in session-only mode
-        if ($hasStructured) {
+    // Respect configured duration consistently. If duration is unknown, be conservative and do NOT auto-redirect.
+    if ($hasStructured) {
+        if ($consentDurationKnown) {
             if ($consentDuration === 0) {
-                $shouldRedirect = true;
+                $shouldRedirect = true; // session-only mode explicitly configured
             } else if ($ts > 0 && (time() - $ts) < ($consentDuration * 60)) {
-                $shouldRedirect = true;
+                $shouldRedirect = true; // within configured duration
             }
-        } elseif ($hasLegacy && $consentDuration === 0) {
-            $shouldRedirect = true; // session-only mode accepts legacy
+            // else: structured consent exists but is expired -> do not redirect; show UI to reconfirm
+        } else if ($debug) {
+            error_log('[LAC DEBUG] Root: consent duration unknown; will not auto-redirect based on session');
         }
-    } else {
-        // Fallback: session-only policy. Any of structured or legacy means OK.
-        if ($hasStructured || $hasLegacy) {
-            $shouldRedirect = true;
-        }
+    } elseif ($hasLegacy && $consentDurationKnown && $consentDuration === 0) {
+        // Legacy flag only counts in session-only mode when that mode is explicitly configured
+        $shouldRedirect = true;
     }
 
     if ($shouldRedirect) {
@@ -324,13 +328,13 @@ try {
 // 3) If plugin is active and available, allow cookie-based auto-recognition; otherwise skip (session-only fallback)
 $cookie_lifetime = defined('LAC_COOKIE_MAX_WINDOW') ? LAC_COOKIE_MAX_WINDOW : 86400; // absolute hard cap for cookie storage
 $cookieName = defined('LAC_COOKIE_NAME') ? LAC_COOKIE_NAME : 'LAC';
-// Allow restoration based on LAC cookie alone only when plugin is truly in use
-if (!empty($lacUsePlugin)) {
+// Allow restoration based on LAC cookie when plugin is truly in use OR duration is known (so we can validate age)
+if (!empty($lacUsePlugin) || $consentDurationKnown) {
     if (isset($_COOKIE[$cookieName]) && ctype_digit($_COOKIE[$cookieName])) {
         $cookieTs = (int)$_COOKIE[$cookieName];
         $cookieAge = time() - $cookieTs;
         $withinCookieWindow = $cookieAge < $cookie_lifetime;
-        $withinConfiguredWindow = ($consentDuration === 0) || ($cookieAge < ($consentDuration * 60));
+        $withinConfiguredWindow = $consentDurationKnown ? (($consentDuration === 0) || ($cookieAge < ($consentDuration * 60))) : false;
         if ($withinCookieWindow && $withinConfiguredWindow) {
             // Reuse original cookie timestamp so plugin expiration matches root logic
             lac_mark_consent_structured($cookieTs);
@@ -341,7 +345,7 @@ if (!empty($lacUsePlugin)) {
         }
     }
 } else if ($debug) {
-    error_log('[LAC DEBUG] Root: skipping cookie reconstruction (session-only fallback)');
+    error_log('[LAC DEBUG] Root: skipping cookie reconstruction (duration unknown and plugin not active)');
 }
 
 // 3) Handle form submission

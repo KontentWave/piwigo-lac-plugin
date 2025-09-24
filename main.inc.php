@@ -45,6 +45,17 @@ if ( (LAC_DEBUG || isset($_GET['lac_debug'])) ) {
   error_log('[LAC DEBUG] main.inc.php bootstrap');
 }
 
+// When debug is enabled via query param, direct PHP error_log to a temp file so logs are easy to find.
+// This affects only the current request and does not change server config.
+if (isset($_GET['lac_debug'])) {
+  $tmpLog = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'piwigo-lac.log';
+  // Suppress warnings if ini_set is disabled; best-effort only.
+  @ini_set('log_errors', 'On');
+  @ini_set('error_log', $tmpLog);
+  // Log where we're writing to for confirmation
+  error_log('[LAC DEBUG] Logging to ' . $tmpLog);
+}
+
 
 // +-----------------------------------------------------------------------+
 // | Add essential event handlers                                         |
