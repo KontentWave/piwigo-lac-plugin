@@ -14,6 +14,10 @@ A production-ready age verification (18+) gate for Piwigo. It blocks access to g
 - Secure headers & hardened session handling (HttpOnly, SameSite, optional Secure)
 - User role awareness (admin/webmaster always exempt)
 
+### Localization / Translation Note
+
+The gate page (`/index.php` at the web root) is intentionally lightweight and can operate when the plugin (or even the full Piwigo gallery bootstrap) is not yet fully initialized. Because of this early execution, it does NOT automatically inherit Piwigo's language pack system. If you require a multilingual consent page you must implement your own strategy here (e.g. server-side simple string map based on `$_GET['lang']` / browser headers, or generate a static localized variant per language and link to the correct one). Avoid embedding heavy bootstrap logic solely for translation—keep the gate minimal for reliability and security.
+
 ## Folder / File Structure (Expected)
 
 You can deploy the root consent assets in one of two ways:
