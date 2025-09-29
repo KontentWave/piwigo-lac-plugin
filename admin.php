@@ -13,13 +13,12 @@ global $template, $page, $conf;
 $page['tab'] = isset($_GET['tab']) ? $_GET['tab'] : 'config';
 
 // Whitelist of valid tabs to prevent inclusion of removed/unknown pages
-$valid_tabs = array('config', 'photo');
+$valid_tabs = array('config');
 if (!in_array($page['tab'], $valid_tabs, true)) {
   $page['tab'] = 'config';
 }
 
-// plugin tabsheet is not present on photo page
-if ($page['tab'] != 'photo')
+// plugin tabsheet setup
 {
   // tabsheet
   include_once(PHPWG_ROOT_PATH.'admin/include/tabsheet.class.php');

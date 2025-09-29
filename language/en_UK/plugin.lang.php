@@ -13,19 +13,12 @@ $lang['Consent Duration'] = 'Consent Duration';
 $lang['Duration (minutes) for which consent remains valid. Set 0 for session-only.'] = 'Duration (minutes) for which consent remains valid. Set 0 for session-only.';
 $lang['Invalid consent duration'] = 'Invalid consent duration';
 $lang['Consent duration too large'] = 'Consent duration too large';
-?><?php
-
-/*
- * as much as possible prefer using comprehensive keys (such as "Check here") instead of
- * formatted keys (eg "lac_check_button"), it would make your code more readable and help
- * the translation team as well
- */
-
-$lang['Legal Age Consent'] = 'Legal Age Consent';
-$lang['What Legal Age Consent can do for me?'] = 'What Legal Age Consent can do for me?';
-$lang['Check me!'] = 'Check me!';
-$lang['Nothing appened, but you didn\'t check the box!'] = 'Nothing appened, but you didn\'t check the box!';
-$lang['Nothing appened, but you checked the box!'] = 'Nothing appened, but you checked the box!';
-$lang['Common configuration'] = 'Common configuration';
-
+$lang['Age Gate Settings'] = 'Age Gate Settings';
+$lang['Enable Age Gate'] = 'Enable Age Gate';
+$lang['Uncheck to disable all gating logic without uninstalling the plugin.'] = 'Uncheck to disable all gating logic without uninstalling the plugin.';
+$lang['External URL used when a visitor declines. Must be http(s) and not this host.'] = 'External URL used when a visitor declines. Must be http(s) and not this host.';
+$lang['Consent Duration (minutes)'] = 'Consent Duration (minutes)';
+$lang['0 = session only. Otherwise re-confirmation required after the elapsed time.'] = '0 = session only. Otherwise re-confirmation required after the elapsed time.';
+$lang['Apply to Logged-in Users'] = 'Apply to Logged-in Users';
+$lang['If checked, non-admin (regular) users must also confirm age. Administrators and webmasters are always excluded.'] = 'If checked, non-admin (regular) users must also confirm age. Administrators and webmasters are always excluded.';
 ?>

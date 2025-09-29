@@ -2,9 +2,9 @@
 /*
 Plugin Name: Legal Age Consent
 Version: 1.0.0
-Description: Toggle core privacy options in Piwigo.
-Author: Your Name
-Author URI: https://cores.sk
+Description: Legal age consent verification system for Piwigo galleries.
+Author: KontentWave
+Author URI: https://github.com/KontentWave
 */
 
 /**
