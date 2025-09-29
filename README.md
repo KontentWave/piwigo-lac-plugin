@@ -244,6 +244,50 @@ For deeper architectural rationale and decisions:
 - Expiration & Reconstruction ADR: `.github/adr/consent-expiration-and-reconstruction.md`
 - Feature BDD specs: `.github/features/*.feature`
 
+## Changelog
+
+### 2025-09-29 – Skeleton Artifact Cleanup
+
+Removed leftover demo files originating from the original Skeleton plugin scaffold. These files were inert (empty or unreferenced) and increased maintenance surface without adding functionality.
+
+Deleted include/demo files:
+
+```
+include/public_events.inc.php
+include/menu_events.class.php
+include/skeleton_page.inc.php
+include/ws_functions.inc.php
+```
+
+Deleted unused templates & admin demo pages:
+
+```
+template/skeleton_page.tpl
+template/my_button.tpl
+template/menubar_lac.tpl
+admin/home.php
+admin/photo.php
+admin/template/home.tpl
+admin/template/photo.tpl
+```
+
+Pending manual removal (binary asset not critical):
+
+```
+template/head.png
+```
+
+Retained for future styling / guard purposes:
+
+```
+template/style.css
+admin/template/style.css
+template/index.php (guard)
+admin/template/index.php (guard)
+```
+
+No runtime logic depended on the removed files; gating, admin configuration, and consent flows remain unaffected.
+
 ## License
 
 See `LICENSE.txt` (Piwigo compatible open-source license).
