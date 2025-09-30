@@ -31,11 +31,9 @@ if (basename(dirname(__FILE__)) != 'lac')
 // +-----------------------------------------------------------------------+
 // | Define plugin constants                                               |
 // +-----------------------------------------------------------------------+
-global $prefixeTable;
 
 define('LAC_ID',      basename(dirname(__FILE__)));
 define('LAC_PATH' ,   PHPWG_PLUGINS_PATH . LAC_ID . '/');
-define('LAC_TABLE',   $prefixeTable . 'lac');
 define('LAC_ADMIN',   get_root_url() . 'admin.php?page=plugin-' . LAC_ID);
 define('LAC_PUBLIC',  get_absolute_root_url() . make_index_url(array('section' => 'lac')) . '/');
 define('LAC_DIR',     PHPWG_ROOT_PATH . PWG_LOCAL_DIR . 'lac/');

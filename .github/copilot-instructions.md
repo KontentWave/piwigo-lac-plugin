@@ -46,7 +46,7 @@ These instructions capture project-specific knowledge so an AI agent can be prod
 
 ## Plugin Constants (set in `main.inc.php`)
 
-- `LAC_PATH`, `LAC_PUBLIC`, `LAC_ADMIN`, `LAC_DIR`, `LAC_TABLE` – reuse these instead of recomputing paths/URLs.
+- `LAC_PATH`, `LAC_PUBLIC`, `LAC_ADMIN`, `LAC_DIR` – reuse these instead of recomputing paths/URLs.
 
 ## Event / Hook Patterns
 

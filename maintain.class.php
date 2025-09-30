@@ -1,143 +1,67 @@
 <?php
 defined('PHPWG_ROOT_PATH') or die('Hacking attempt!');
 
-/**
- * This class is used to expose maintenance methods to the plugins manager
- * It must extends PluginMaintain and be named "PLUGINID_maintain"
- * where PLUGINID is the directory name of your plugin.
- */
 class lac_maintain extends PluginMaintain
 {
-  private $default_conf = array(
-    'option1' => 10,
-    'option2' => true,
-    'option3' => 'two',
-    );
-
-  private $table;
-  private $dir;
-
-  function __construct($plugin_id)
+  public function __construct($plugin_id)
   {
-    parent::__construct($plugin_id); // always call parent constructor
-
-    global $prefixeTable;
-
-    // Class members can't be declared with computed values so initialization is done here
-    $this->table = $prefixeTable . 'lac';
-    $this->dir = PHPWG_ROOT_PATH . PWG_LOCAL_DIR . 'lac/';
+    parent::__construct($plugin_id);
   }
 
-  /**
-   * Plugin installation
-   *
-   * Perform here all needed step for the plugin installation such as create default config,
-   * add database tables, add fields to existing tables, create local folders...
-   */
-  function install($plugin_version, &$errors=array())
+  public function install($plugin_version, &$errors = array())
   {
     global $conf;
 
-    // add config parameter
-    if (empty($conf['lac']))
-    {
-      // conf_update_param well serialize and escape array before database insertion
-      // the third parameter indicates to update $conf['lac'] global variable as well
-      conf_update_param('lac', $this->default_conf, true);
-    }
-    else
-    {
-      $old_conf = safe_unserialize($conf['lac']);
+    $defaults = array(
+      'lac_enabled' => true,
+      'lac_fallback_url' => '',
+      'lac_consent_duration' => 0,
+      'lac_apply_to_logged_in' => false,
+    );
 
-      if (empty($old_conf['option3']))
-      { // use case: this parameter was added in a new version
-        $old_conf['option3'] = 'two';
+    foreach ($defaults as $param => $value) {
+      if (!isset($conf[$param])) {
+        $conf[$param] = $value;
       }
 
-      conf_update_param('lac', $old_conf, true);
-    }
-
-    // add a new table
-    pwg_query('
-CREATE TABLE IF NOT EXISTS `'. $this->table .'` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `field1` mediumint(8) DEFAULT NULL,
-  `field2` varchar(64) NOT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8
-;');
-
-    // add a new column to existing table
-    $result = pwg_query('SHOW COLUMNS FROM `'.IMAGES_TABLE.'` LIKE "lac";');
-    if (!pwg_db_num_rows($result))
-    {
-      pwg_query('ALTER TABLE `' . IMAGES_TABLE . '` ADD `lac` TINYINT(1) NOT NULL DEFAULT 0;');
-    }
-
-    // create a local directory
-    if (!file_exists($this->dir))
-    {
-      mkdir($this->dir, 0755);
+      if (function_exists('conf_update_param')) {
+        conf_update_param($param, $conf[$param]);
+      }
     }
   }
 
-  /**
-   * Plugin activation
-   *
-   * This function is triggered after installation, by manual activation or after a plugin update
-   * for this last case you must manage updates tasks of your plugin in this function
-   */
-  function activate($plugin_version, &$errors=array())
+  public function activate($plugin_version, &$errors = array())
   {
+    // Nothing additional to do; installation ensures defaults.
   }
 
-  /**
-   * Plugin deactivation
-   *
-   * Triggered before uninstallation or by manual deactivation
-   */
-  function deactivate()
+  public function deactivate()
   {
+    // No filesystem or database artifacts to revert.
   }
 
-  /**
-   * Plugin (auto)update
-   *
-   * This function is called when Piwigo detects that the registered version of
-   * the plugin is older than the version exposed in main.inc.php
-   * Thus it's called after a plugin update from admin panel or a manual update by FTP
-   */
-  function update($old_version, $new_version, &$errors=array())
+  public function update($old_version, $new_version, &$errors = array())
   {
-    // I (mistic100) chosed to handle install and update in the same method
-    // you are free to do otherwize
     $this->install($new_version, $errors);
   }
 
-  /**
-   * Plugin uninstallation
-   *
-   * Perform here all cleaning tasks when the plugin is removed
-   * you should revert all changes made in 'install'
-   */
-  function uninstall()
+  public function uninstall()
   {
-    // delete configuration
-    conf_delete_param('lac');
+    global $conf;
 
-    // delete table
-    pwg_query('DROP TABLE `'. $this->table .'`;');
+    $params = array(
+      'lac_enabled',
+      'lac_fallback_url',
+      'lac_consent_duration',
+      'lac_apply_to_logged_in',
+    );
 
-    // delete field
-    pwg_query('ALTER TABLE `'. IMAGES_TABLE .'` DROP `lac`;');
+    foreach ($params as $param) {
+      unset($conf[$param]);
 
-    // delete local folder
-    // use a recursive function if you plan to have nested directories
-    foreach (scandir($this->dir) as $file)
-    {
-      if ($file == '.' or $file == '..') continue;
-      unlink($this->dir.$file);
+      if (function_exists('conf_delete_param')) {
+        call_user_func('conf_delete_param', $param);
+      }
     }
-    rmdir($this->dir);
   }
 }

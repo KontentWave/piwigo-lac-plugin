@@ -7,7 +7,7 @@ defined('LAC_PATH') or die('Hacking attempt!');
  */
 
 // Core plugin constants (set in main.inc.php, referenced here for completeness)
-// LAC_PATH, LAC_PUBLIC, LAC_ADMIN, LAC_DIR, LAC_TABLE
+// LAC_PATH, LAC_PUBLIC, LAC_ADMIN, LAC_DIR
 
 // Security and validation limits
 if (!defined('LAC_MAX_FALLBACK_URL_LEN')) {
