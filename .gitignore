@@ -16,3 +16,4 @@ pem_metadata.txt
 
 # Everything else should be tracked (plugin source, webroot/, .github/, docs)
 
+/.specstory/
