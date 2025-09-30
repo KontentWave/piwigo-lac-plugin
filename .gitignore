@@ -1,9 +1,18 @@
 # Ignore vendor + test output
 /vendor/
-/tests/_output/
+/tests/
+/tools/
+/.github/
+/.specstory/
+
 
 # Ignore Composer lockfile if you don’t want it in plugin repo
 composer.lock
+lac.code-workspace
+phpunit.xml.dist
+composer.json
+composer.lock
+pem_metadata.txt
 
 # Everything else should be tracked (plugin source, webroot/, .github/, docs)
 
